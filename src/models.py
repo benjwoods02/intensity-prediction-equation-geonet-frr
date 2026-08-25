@@ -265,3 +265,40 @@ def apply_class_weights(frame, classes, target_column="mmi", weight_column="weig
     weights = balanced_class_weights(frame[target_column], classes)
     scaled = frame[weight_column] * frame[target_column].map(weights)
     return frame.assign(**{weight_column: scaled})
+
+
+def high_intensity_discrimination(probabilities, y_true, classes, threshold=6,
+                                  sample_weight=None):
+    """How well the model ranks cells by risk of damaging shaking.
+
+    Point classification is the wrong question for the intensities that matter
+    most. MMI 7 and above is under 2% of reports, so a model choosing the most
+    likely single level will essentially never name it, and recall measured
+    that way reads as zero even for a model carrying real signal.
+
+    Ranking is the right question, and the one an operational system actually
+    asks: which places are most likely to have been shaken hard enough to
+    cause damage? Summing the predicted probability at or above a threshold
+    gives a risk score, and the area under the ROC curve measures whether that
+    score sorts the damaging cells above the rest.
+
+    This is also how intensity products are used in practice. A response team
+    is not served by a claim that one square kilometre is exactly MMI 7, but
+    is served by a ranked list of where damaging shaking is most likely.
+    """
+    from sklearn.metrics import roc_auc_score
+
+    probabilities = np.asarray(probabilities, dtype="float64")
+    classes = np.asarray(classes)
+
+    columns = np.where(classes >= threshold)[0]
+    if len(columns) == 0:
+        return np.nan
+
+    risk_score = probabilities[:, columns].sum(axis=1)
+    actual = np.asarray(y_true) >= threshold
+
+    if actual.all() or not actual.any():
+        return np.nan
+
+    return float(roc_auc_score(actual, risk_score, sample_weight=sample_weight))

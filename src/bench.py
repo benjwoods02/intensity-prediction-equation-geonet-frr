@@ -56,7 +56,8 @@ from sklearn.svm import SVC, LinearSVR, SVR
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from models import (AttenuationBaseline, apply_class_weights, cell_level_metrics,
-                    expected_mmi, per_class_recall, ranked_probability_score,
+                    expected_mmi, high_intensity_discrimination, per_class_recall,
+                    ranked_probability_score,
                     report_level_metrics)
 
 MMI_CLASSES = np.arange(3, 9)
@@ -250,7 +251,7 @@ def run_candidate(candidate, train, test, feature_columns, target_column="mmi",
             else:
                 candidate.estimator.fit(X_train, y_train)
 
-            rps = np.nan
+            rps = auc6 = auc7 = np.nan
             if candidate.kind == "classification":
                 probabilities = candidate.estimator.predict_proba(X_test)
                 classes = candidate.estimator.classes_ if hasattr(candidate.estimator, "classes_") \
@@ -266,6 +267,10 @@ def run_candidate(candidate, train, test, feature_columns, target_column="mmi",
                     full[:, list(MMI_CLASSES).index(level)] = probabilities[:, position]
                 rps = ranked_probability_score(full, test[target_column], MMI_CLASSES,
                                                test[weight_column])
+                auc6 = high_intensity_discrimination(full, test[target_column], MMI_CLASSES,
+                                                     6, test[weight_column])
+                auc7 = high_intensity_discrimination(full, test[target_column], MMI_CLASSES,
+                                                     7, test[weight_column])
             else:
                 predicted = candidate.estimator.predict(X_test)
                 predicted_class = np.clip(np.rint(predicted), 3, 8).astype(int)
@@ -290,6 +295,8 @@ def run_candidate(candidate, train, test, feature_columns, target_column="mmi",
         "status": "subsampled" if was_subsampled else "ok",
         "train_rows": len(fit_rows),
         "rps": round(rps, 4) if rps == rps else np.nan,
+        "auc_mmi6plus": round(auc6, 4) if auc6 == auc6 else np.nan,
+        "auc_mmi7plus": round(auc7, 4) if auc7 == auc7 else np.nan,
         "report_within_1": round(rounded["within_1_mmi"], 4),
         "report_mae": round(report["mae"], 4),
         "report_bias": round(report["bias"], 4),
