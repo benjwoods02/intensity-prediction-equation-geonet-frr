@@ -272,6 +272,49 @@ def build_cells(felt, min_reports=5, cell_size_m=1000, verbose=True):
     )
 
 
+WEIGHT_SCHEMES = ("sqrt", "count", "equal")
+
+
+def apply_weight_scheme(long_form, scheme="sqrt"):
+    """Set how much each cell contributes overall, without changing its label mix.
+
+    Within a cell the relative weights always follow the reported proportions,
+    so the label distribution is untouched. What changes is how much the cell
+    counts against every other cell:
+
+      count   influence proportional to the number of reports. This is the
+              inverse-variance optimal choice if reports were independent
+              observations, but they are not: five hundred people describing
+              the same shaking at the same place is nothing like five hundred
+              independent measurements. It also pulls population bias straight
+              into the loss, since dense urban cells would dominate.
+
+      sqrt    influence proportional to the square root of the report count.
+              Standard error scales with the inverse square root of sample
+              size, so this credits well observed cells without letting them
+              swamp sparse ones. The default.
+
+      equal   every cell contributes exactly one unit regardless of how many
+              people reported. Removes population bias entirely, at the cost
+              of treating a five report cell as being as reliable as a five
+              hundred report one.
+    """
+    if scheme not in WEIGHT_SCHEMES:
+        raise ValueError(f"unknown weight scheme {scheme!r}, expected one of {WEIGHT_SCHEMES}")
+
+    totals = long_form.groupby(["public_id", "cell_x", "cell_y"])["weight"].transform("sum")
+    proportion = long_form["weight"] / totals
+
+    if scheme == "count":
+        influence = totals
+    elif scheme == "sqrt":
+        influence = np.sqrt(totals)
+    else:
+        influence = 1.0
+
+    return long_form.assign(weight=proportion * influence, cell_reports=totals)
+
+
 def expand_to_weighted_labels(cells, feature_columns=None):
     """Turn each cell into one weighted row per MMI level actually reported.
 
@@ -296,10 +339,20 @@ def expand_to_weighted_labels(cells, feature_columns=None):
       weight  how many people at that cell reported it
     """
     identifiers = ["public_id", "cell_x", "cell_y"]
-    carried = list(feature_columns) if feature_columns is not None else [
+    requested = list(feature_columns) if feature_columns is not None else [
         column for column in cells.columns
         if column not in MMI_COLUMNS and column not in identifiers
     ]
+
+    # Callers commonly pass a feature list plus a few extras and end up
+    # repeating one. melt raises an unhelpful KeyError on a duplicate, so
+    # deduplicate here while preserving order.
+    seen = set(identifiers)
+    carried = []
+    for column in requested:
+        if column not in seen:
+            carried.append(column)
+            seen.add(column)
 
     long_form = cells.melt(
         id_vars=identifiers + carried,
