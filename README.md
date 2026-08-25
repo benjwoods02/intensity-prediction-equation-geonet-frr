@@ -38,7 +38,7 @@ A secondary finding: the model learned the opposite sign to the expected relatio
 
 ## Status
 
-This repository currently contains the final report. A rebuilt implementation is in progress, covering:
+A rebuilt implementation is in progress as solo work. The `src/`, `notebooks/` and `tests/` directories are that rebuild; the report above documents the original project. The rebuild covers:
 
 - A reproducible ingestion step pulling directly from the public GeoNet API
 - The cleaning and grid aggregation pipeline
