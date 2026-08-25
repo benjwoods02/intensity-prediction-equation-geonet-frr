@@ -9,3 +9,6 @@ __pycache__/
 .ipynb_checkpoints/
 .env
 .venv/
+
+# The original DATA601 report is superseded by this rebuild and not published
+DATA601-FRR2-Report.pdf
