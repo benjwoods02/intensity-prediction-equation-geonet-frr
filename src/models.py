@@ -120,8 +120,10 @@ class AttenuationBaseline(BaseEstimator, RegressorMixin):
 
     def equation(self):
         c = self.coefficients_
+        distance = c["log_distance"]
+        sign = "-" if distance < 0 else "+"
         return (f"MMI = {c['intercept']:.3f} + {c['magnitude']:.3f} * M "
-                f"{c['log_distance']:+.3f} * log10(R)")
+                f"{sign} {abs(distance):.3f} * log10(R)")
 
 
 def expected_mmi(probabilities, classes):

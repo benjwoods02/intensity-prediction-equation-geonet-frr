@@ -47,9 +47,9 @@ Two findings beyond the ranking.
 
 Intensity work normally quotes the percentage of predictions within one MMI unit. Against continuous predictions it measures the wrong thing.
 
-MMI 3, 4 and 5 are 90.6% of all reports, so predicting exactly 4.0 sits within one unit of almost everything. It scores 0.898, while predicting 4.2, a better estimate by every other measure, scores 0.597. The metric rewards landing on an integer rather than being close.
+MMI 3, 4 and 5 are 90.6% of all reports, so predicting exactly 4.0 sits within one unit of almost everything. Moving that prediction to 4.2 costs 9% in mean absolute error and 34% in within-1, because 4.2 now falls more than a unit from MMI 3. The metric collapses the moment a prediction stops being an integer, so it measures integer-ness rather than closeness.
 
-Scored the way the literature normally scores it, the selected model reaches 0.739 against a constant 4.0 at 0.876, even though its error is genuinely lower (report MAE 0.719 against 0.800). Mean absolute error and the Ranked Probability Score are used instead, with within-1 kept on rounded predictions where it is at least comparable.
+That is enough to reverse the ranking between a real model and none. Scored the way the literature normally scores it, the selected model reaches 0.739 against 0.876 for a constant 4.0, even though its error is genuinely lower (report MAE 0.719 against 0.800). Mean absolute error and the Ranked Probability Score are used instead, with within-1 kept on rounded predictions where it is at least comparable.
 
 ### No model can name damaging shaking, but the leaders can rank it
 
