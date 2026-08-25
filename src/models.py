@@ -195,3 +195,73 @@ def per_class_recall(y_true, y_predicted_class, classes):
         })
 
     return pd.DataFrame(rows)
+
+
+def ranked_probability_score(probabilities, y_true, classes, sample_weight=None):
+    """Ranked Probability Score for ordinal forecasts. Lower is better.
+
+    This is the metric the "within 1 MMI" score should probably have been all
+    along. It compares the predicted cumulative distribution with the observed
+    one, squared and summed across levels:
+
+        RPS = mean over samples of  sum_k (F_pred(k) - F_obs(k))^2 / (K - 1)
+
+    Three properties make it the right fit here.
+
+    It respects the ordering. Predicting MMI 7 when the answer is 8 costs far
+    less than predicting 3, which plain log loss or a Brier score would treat
+    as equally wrong.
+
+    It is proper, meaning the best score comes from reporting your honest
+    belief. There is no equivalent of the integer-snapping trick that lets a
+    constant prediction win on within-1.
+
+    It uses the whole predicted distribution rather than collapsing it, so a
+    model that is uncertain in the right way scores better than one that is
+    confidently wrong.
+
+    It is also the standard score for ordinal and categorical forecasts in
+    meteorology and seismology, so it is not an invention of this project.
+    """
+    probabilities = np.asarray(probabilities, dtype="float64")
+    classes = np.asarray(classes)
+    y_true = np.asarray(y_true)
+
+    predicted_cdf = probabilities.cumsum(axis=1)
+    observed_cdf = (classes[None, :] >= y_true[:, None]).astype("float64")
+
+    per_sample = ((predicted_cdf - observed_cdf) ** 2).sum(axis=1) / (len(classes) - 1)
+
+    if sample_weight is None:
+        return float(per_sample.mean())
+
+    weights = np.asarray(sample_weight, dtype="float64")
+    return float((weights * per_sample).sum() / weights.sum())
+
+
+def balanced_class_weights(y, classes):
+    """Weight each intensity level inversely to how often it appears.
+
+    MMI 7 and 8 are about 1.3% of reports between them, so an unweighted fit
+    can ignore them entirely and still score well. Balancing makes a rare high
+    intensity worth as much in the loss as a common low one.
+
+    Returned as a mapping so it can be folded into the existing sample weights
+    rather than relying on a class_weight argument, which regressors and
+    several classifiers do not accept.
+    """
+    y = np.asarray(y)
+    counts = {level: max((y == level).sum(), 1) for level in classes}
+    total = sum(counts.values())
+    return {level: total / (len(classes) * count) for level, count in counts.items()}
+
+
+def apply_class_weights(frame, classes, target_column="mmi", weight_column="weight"):
+    """Fold balanced class weights into the existing per-row sample weights.
+
+    The cell weighting decides how much a location counts. The class weighting
+    decides how much an intensity level counts. Multiplying them keeps both.
+    """
+    weights = balanced_class_weights(frame[target_column], classes)
+    scaled = frame[weight_column] * frame[target_column].map(weights)
+    return frame.assign(**{weight_column: scaled})

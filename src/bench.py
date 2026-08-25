@@ -55,8 +55,9 @@ from sklearn.preprocessing import PolynomialFeatures, StandardScaler
 from sklearn.svm import SVC, LinearSVR, SVR
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
-from models import (AttenuationBaseline, cell_level_metrics, expected_mmi,
-                    per_class_recall, report_level_metrics)
+from models import (AttenuationBaseline, apply_class_weights, cell_level_metrics,
+                    expected_mmi, per_class_recall, ranked_probability_score,
+                    report_level_metrics)
 
 MMI_CLASSES = np.arange(3, 9)
 
@@ -249,12 +250,22 @@ def run_candidate(candidate, train, test, feature_columns, target_column="mmi",
             else:
                 candidate.estimator.fit(X_train, y_train)
 
+            rps = np.nan
             if candidate.kind == "classification":
                 probabilities = candidate.estimator.predict_proba(X_test)
                 classes = candidate.estimator.classes_ if hasattr(candidate.estimator, "classes_") \
                     else candidate.estimator[-1].classes_
                 predicted = expected_mmi(probabilities, classes)
                 predicted_class = np.asarray(classes)[probabilities.argmax(axis=1)]
+
+                # A classifier that saw only some levels in training returns a
+                # narrower probability matrix, so pad it back to the full scale
+                # before scoring against the fixed set of intensities.
+                full = np.zeros((len(probabilities), len(MMI_CLASSES)))
+                for position, level in enumerate(classes):
+                    full[:, list(MMI_CLASSES).index(level)] = probabilities[:, position]
+                rps = ranked_probability_score(full, test[target_column], MMI_CLASSES,
+                                               test[weight_column])
             else:
                 predicted = candidate.estimator.predict(X_test)
                 predicted_class = np.clip(np.rint(predicted), 3, 8).astype(int)
@@ -264,6 +275,10 @@ def run_candidate(candidate, train, test, feature_columns, target_column="mmi",
                 "status": f"failed: {type(error).__name__}", "seconds": round(time.perf_counter() - started, 1)}
 
     report = report_level_metrics(test[target_column], predicted, test[weight_column])
+    # within-1 is scored on the rounded prediction. Against a continuous value it
+    # rewards landing exactly on an integer rather than being close, which lets a
+    # constant predictor beat every real model.
+    rounded = report_level_metrics(test[target_column], predicted_class, test[weight_column])
     cells = cell_level_metrics(test.assign(predicted_mmi=predicted))
     recall = per_class_recall(test[target_column], predicted_class, MMI_CLASSES)
     high = recall[recall["mmi"] >= 7]["recall"]
@@ -274,7 +289,8 @@ def run_candidate(candidate, train, test, feature_columns, target_column="mmi",
         "kind": candidate.kind,
         "status": "subsampled" if was_subsampled else "ok",
         "train_rows": len(fit_rows),
-        "report_within_1": round(report["within_1_mmi"], 4),
+        "rps": round(rps, 4) if rps == rps else np.nan,
+        "report_within_1": round(rounded["within_1_mmi"], 4),
         "report_mae": round(report["mae"], 4),
         "report_bias": round(report["bias"], 4),
         "cell_within_1": round(cells["within_1_mmi"], 4),
@@ -291,9 +307,17 @@ def _weight_kwargs(estimator, weights):
     return {"sample_weight": weights}
 
 
-def run_bench(train, test, feature_columns, candidates=None, random_state=7, verbose=True):
-    """Run every candidate and return one comparison table."""
+def run_bench(train, test, feature_columns, candidates=None, random_state=7,
+              class_weighted=False, verbose=True):
+    """Run every candidate and return one comparison table.
+
+    class_weighted folds balanced class weights into the training sample
+    weights, so a rare high intensity counts as much in the loss as a common
+    low one. Without it no model predicts MMI 7 or 8 at all.
+    """
     candidates = candidates if candidates is not None else build_registry(random_state)
+    if class_weighted:
+        train = apply_class_weights(train, MMI_CLASSES)
     results = []
 
     for index, candidate in enumerate(candidates, start=1):
