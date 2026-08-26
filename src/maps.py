@@ -170,7 +170,7 @@ def contact_sheet(fields, physical, event, rings, path, columns=5):
     """Every model on one page, ordered by accuracy.
 
     Read left to right the maps get less accurate. Read by title colour, only
-    four of them are usable. The two orderings do not agree, which is the
+    two of them are usable. The two orderings do not agree, which is the
     finding this project exists to make.
     """
     rows = int(np.ceil(len(physical) / columns))
