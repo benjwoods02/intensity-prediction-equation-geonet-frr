@@ -15,13 +15,17 @@ be dishonest to exclude the family the benchmark belongs to.
 A warning about the headline metric. "Within 1 MMI" looks like the natural
 score for this problem and it is what the literature usually quotes, but it
 behaves badly against continuous predictions. MMI 3, 4 and 5 account for 90.6%
-of all reports, so a model predicting exactly 4.0 is within one unit of almost
-everything and scores about 0.90. Predicting 4.2, a slightly better estimate
-by every other measure, scores 0.60, because it falls more than one unit from
-MMI 3. The metric rewards landing on an integer rather than being close. Mean
-absolute error is used as the primary score for that reason, with within-1
-reported alongside for comparability and a constant-prediction reference so it
-can be read honestly.
+of all reports, so a prediction of exactly 4.0 is within one unit of almost
+everything and scores 0.898. Moving that prediction to 4.2 costs 9% in mean
+absolute error and 34% in within-1, because 4.2 falls more than one unit from
+MMI 3. The metric collapses the moment a prediction stops being an integer, so
+what it measures is integer-ness rather than closeness.
+
+That is enough to reverse the ranking between a real model and none: scored
+this way the selected model reaches 0.739 against 0.876 for a constant 4.0,
+despite lower error on every other measure. Mean absolute error is the primary
+score here for that reason, with within-1 reported on rounded predictions,
+where both sides are integers and the comparison is at least fair.
 
 Some estimators do not scale to tens of thousands of rows. Rather than
 silently dropping them or letting the bench hang, those carry a training row
@@ -280,9 +284,9 @@ def run_candidate(candidate, train, test, feature_columns, target_column="mmi",
                 "status": f"failed: {type(error).__name__}", "seconds": round(time.perf_counter() - started, 1)}
 
     report = report_level_metrics(test[target_column], predicted, test[weight_column])
-    # within-1 is scored on the rounded prediction. Against a continuous value it
-    # rewards landing exactly on an integer rather than being close, which lets a
-    # constant predictor beat every real model.
+    # within-1 is scored on the rounded prediction. Against a continuous value
+    # it rewards landing exactly on an integer rather than being close, which
+    # is enough to let a constant outscore a strictly better prediction.
     rounded = report_level_metrics(test[target_column], predicted_class, test[weight_column])
     cells = cell_level_metrics(test.assign(predicted_mmi=predicted))
     recall = per_class_recall(test[target_column], predicted_class, MMI_CLASSES)
@@ -302,7 +306,9 @@ def run_candidate(candidate, train, test, feature_columns, target_column="mmi",
         "report_bias": round(report["bias"], 4),
         "cell_within_1": round(cells["within_1_mmi"], 4),
         "cell_mae": round(cells["mae"], 4),
-        "recall_mmi7plus": round(float(np.nanmean(high)), 4) if len(high) else np.nan,
+        # nanmean over an all-NaN slice warns rather than returning NaN quietly,
+        # and every level can be absent from a small test set.
+        "recall_mmi7plus": round(float(np.nanmean(high)), 4) if high.notna().any() else np.nan,
         "seconds": round(time.perf_counter() - started, 1),
     }
 

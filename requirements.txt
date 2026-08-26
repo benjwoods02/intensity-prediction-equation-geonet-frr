@@ -1,11 +1,9 @@
-pandas>=2.2
-requests>=2.31
+# Everything src/ and tests/ need. This is what CI installs.
 numpy>=1.26
+pandas>=2.2
 scipy>=1.11
 scikit-learn>=1.4
 matplotlib>=3.8
-seaborn>=0.13
 pyproj>=3.6
-shapely>=2.0
-jupyter>=1.0
+requests>=2.31
 pytest>=8.0

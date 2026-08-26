@@ -51,9 +51,12 @@ import bench as B
 import models as M
 import spatial as S
 from clean import apply_weight_scheme, expand_to_weighted_labels
-from features import MODEL_FEATURES
+from features import MODEL_FEATURES, model_features
 
-COASTLINE_PATH = Path(__file__).resolve().parent.parent / "assets" / "nz_coastline.json"
+# Everything is resolved against the repository root rather than the working
+# directory, so `python src/maps.py` behaves the same from anywhere.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+COASTLINE_PATH = REPO_ROOT / "assets" / "nz_coastline.json"
 
 # The largest earthquake in the catalogue, and the one whose shaking pattern a
 # New Zealand reader will recognise. A large event is the right one to draw: it
@@ -112,9 +115,10 @@ def grid_shape(grid):
     return grid["northing"].nunique(), grid["easting"].nunique()
 
 
-def predict_field(candidate, event, grid, rings):
+def predict_field(candidate, event, grid, rings, feature_columns=None):
     """Predicted intensity over the grid, as a 2D array with sea set to NaN."""
-    mapped = S.shake_map(candidate.estimator, MODEL_FEATURES, event,
+    feature_columns = MODEL_FEATURES if feature_columns is None else feature_columns
+    mapped = S.shake_map(candidate.estimator, feature_columns, event,
                          grid=grid, kind=candidate.kind)
     rows, columns = grid_shape(grid)
 
@@ -244,17 +248,21 @@ def individual_maps(fields, physical, event, rings, directory):
     return written
 
 
-def prepare(features_path="data/processed/features.csv",
-            bench_path="data/processed/bench_results.csv",
-            shortlist_size=14, verbose=True):
+def prepare(features_path=None, bench_path=None, shortlist_size=14, verbose=True):
     """Load the data, refit the shortlist, and run the physical check.
 
-    Returns the fitted candidates and the same verdict table notebook 04
-    builds, so the maps and the numbers can never disagree.
+    Returns the fitted candidates, the same verdict table notebook 04 builds,
+    and the feature list actually used, so the maps and the numbers can never
+    disagree.
     """
+    features_path = features_path or REPO_ROOT / "data" / "processed" / "features.csv"
+    bench_path = bench_path or REPO_ROOT / "data" / "processed" / "bench_results.csv"
+
     features = pd.read_csv(features_path)
+    columns = model_features(features, verbose=verbose)
+
     labels = apply_weight_scheme(
-        expand_to_weighted_labels(features, feature_columns=MODEL_FEATURES + ["mmi_mean"]),
+        expand_to_weighted_labels(features, feature_columns=columns + ["mmi_mean"]),
         scheme="sqrt")
     labels["is_weekend"] = labels["is_weekend"].astype(int)
     train, _ = M.split_by_event(labels, test_size=0.2, verbose=False)
@@ -265,11 +273,11 @@ def prepare(features_path="data/processed/features.csv",
 
     if verbose:
         print(f"refitting {len(shortlist)} candidates on {len(train):,} rows")
-    fitted = B.fit_shortlist(shortlist["model"], train, MODEL_FEATURES)
+    fitted = B.fit_shortlist(shortlist["model"], train, columns)
 
     checks = []
     for name, candidate in fitted.items():
-        summary = S.physical_plausibility(candidate.estimator, MODEL_FEATURES,
+        summary = S.physical_plausibility(candidate.estimator, columns,
                                           kind=candidate.kind)
         verdict = S.plausibility_verdict(summary)
         checks.append({"model": name,
@@ -282,20 +290,20 @@ def prepare(features_path="data/processed/features.csv",
                 .sort_values("cell_mae")
                 .reset_index(drop=True))
 
-    return fitted, physical
+    return fitted, physical, columns
 
 
-def render_all(output_dir="maps", event=None, spacing_km=5, verbose=True):
+def render_all(output_dir=None, event=None, spacing_km=5, verbose=True):
     """Regenerate every map. This is what running the module does."""
     event = event or KAIKOURA
-    output_dir = Path(output_dir)
+    output_dir = Path(output_dir) if output_dir else REPO_ROOT / "maps"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    fitted, physical = prepare(verbose=verbose)
+    fitted, physical, columns = prepare(verbose=verbose)
     rings = load_coastline()
     grid = S.nz_grid(spacing_km=spacing_km)
 
-    fields = {name: predict_field(candidate, event, grid, rings)
+    fields = {name: predict_field(candidate, event, grid, rings, columns)
               for name, candidate in fitted.items()}
 
     if verbose:
@@ -318,4 +326,4 @@ def render_all(output_dir="maps", event=None, spacing_km=5, verbose=True):
 
 
 if __name__ == "__main__":
-    render_all(output_dir=Path(__file__).resolve().parent.parent / "maps")
+    render_all()

@@ -95,17 +95,19 @@ All are drawn for the same earthquake on the same fixed MMI scale, so the panels
 Five were found and handled, each documented in the notebooks:
 
 - Teleseismic events. The GeoNet catalogue lists earthquakes New Zealand instruments detected, not New Zealand earthquakes. Filtering removes 72% of raw entries, including events in Chile and Japan.
-- Duplicate magnitude solutions. Several catalogue entries for one physical earthquake.
+- Reports filed from outside New Zealand. 88 locations in Australia, the United Kingdom, Spain, the Netherlands and the Philippines. Real people, but not New Zealand shaking.
 - Null Island. 34 reporting locations at exactly longitude 0.005, latitude 0.003, carrying 469 reports. Failed geolocation defaulting to the coordinate system origin.
 - Out-of-scale intensities. The survey produces MMI 3 to 8, but the archive holds a handful of MMI 1 and 2 reports.
 - Event misattribution during aftershock sequences. Magnitude 4 to 5 events appear to produce rising intensity with distance, which is impossible. The far-field cells trace to two November 2016 Kaikoura aftershocks, where people could not tell which shake they were reporting.
+
+Duplicate magnitude solutions exist in the raw catalogue too, several entries for one physical earthquake, but in this window they are all teleseismic and the New Zealand filter reaches them first. The deduplication step therefore removes nothing and is kept as a guard rather than counted above.
 
 ## Repository layout
 
 ```
 src/         pipeline modules: ingest, clean, features, models, bench, spatial, maps
 notebooks/   the analysis, four notebooks in order
-tests/       107 tests, entirely offline
+tests/       153 tests, one file per module, entirely offline
 maps/        rendered shake maps, one per candidate
 assets/      simplified NZ coastline, for masking maps to land
 ```
@@ -113,20 +115,22 @@ assets/      simplified NZ coastline, for masking maps to land
 ## Running it
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-notebooks.txt
 pytest tests/
 jupyter notebook notebooks/
 ```
 
+`requirements.txt` is what the pipeline and the tests need, and is what CI installs. `requirements-notebooks.txt` adds Jupyter on top.
+
 Run the notebooks in order. Notebook 01 fetches from the GeoNet APIs and caches responses under `data/raw`, so later runs do not hit the API again. No data is committed to this repository.
 
-Vs30 site condition data is optional and not redistributed here; the pipeline runs without it.
+Vs30 site condition data is not redistributed here, because the source grid's terms are unconfirmed. It is genuinely optional: `model_features` drops any feature the data cannot supply, so a clone without it trains on the remaining eight and every model in the bench still fits. Partial gaps are a different case and are filled with the median of the cells that did match, flagged so a filled value is never mistaken for a measured one.
 
 ## Tests
 
-107 tests, run on Python 3.11, 3.12 and 3.13 by GitHub Actions, with a second pass promoting deprecation warnings to errors. The suite is entirely offline: API responses are stubbed and the geospatial and model checks use synthetic data, so a GeoNet outage cannot turn the build red for reasons unrelated to the code.
+153 tests, one file per module, run on Python 3.11, 3.12 and 3.13 by GitHub Actions, with a second pass promoting deprecation warnings to errors. The suite is entirely offline: API responses are stubbed and the geospatial and model checks use synthetic data, so a GeoNet outage cannot turn the build red for reasons unrelated to the code.
 
-Six of those tests exist because of the far-field bug above. One of them builds a model that attenuates correctly to 400 km and then jumps to MMI 8, and asserts that the old truncated sweep would have accepted it.
+Several exist because of specific mistakes. One builds a model that attenuates correctly to 400 km and then jumps to MMI 8, and asserts that the old truncated sweep would have accepted it. Another checks a list of New Zealand cities against the coastline mask, because at a coarser simplification the Auckland isthmus vanished and put the country's largest city in the sea on every map.
 
 ## Context
 
@@ -135,3 +139,7 @@ This is a full rebuild, written independently, of a problem first worked on as a
 ## Data source
 
 [GeoNet Felt RAPID Reports](https://api.geonet.org.nz/) and the [GeoNet quake search API](https://quakesearch.geonet.org.nz/), both publicly available. Coastline from [Natural Earth](https://www.naturalearthdata.com/), public domain.
+
+## License
+
+[MIT](LICENSE). GeoNet data is published by GNS Science under CC BY 4.0.

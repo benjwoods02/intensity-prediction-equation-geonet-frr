@@ -104,15 +104,17 @@ def filter_to_mainland(felt, verbose=True):
                    so leaving them in would invent a densely observed cell
                    thousands of kilometres from every epicentre.
 
-      elsewhere    Genuine reports filed from outside New Zealand: Australia,
-                   the United Kingdom, the Philippines and others. Real people,
-                   but not New Zealand shaking, and the distances would be
-                   meaningless.
+      elsewhere    Everything else outside the mainland box. Mostly genuine
+                   reports filed from Australia, the United Kingdom, the
+                   Philippines and others: real people, but not New Zealand
+                   shaking, and the distances would be meaningless.
 
-      chathams     A small number of legitimate Chatham Islands reports. These
-                   are dropped only because they fall outside the NZTM2000 zone
-                   of validity, so they cannot share a projected grid with the
-                   mainland. Worth stating as a known limitation.
+                   This category also absorbs any Chatham Islands reports,
+                   which are legitimate New Zealand shaking. They are dropped
+                   because the islands sit outside the NZTM2000 zone of
+                   validity and so cannot share a projected grid with the
+                   mainland. That is a known limitation rather than a data
+                   problem, and there is no separate label for it.
     """
     category = classify_locations(felt)
     kept = felt[category == "mainland"].reset_index(drop=True)

@@ -14,9 +14,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from features import (add_local_time_features, add_vs30, build_features,
-                      encode_circular, haversine_km, initial_bearing_degrees,
-                      load_vs30_grid)
+from clean import from_nztm
+from features import (MODEL_FEATURES, add_local_time_features, add_vs30,
+                      build_features, encode_circular, haversine_km,
+                      initial_bearing_degrees, load_vs30_grid, model_features)
 
 CHRISTCHURCH = (172.6376, -43.5309)
 WELLINGTON = (174.7762, -41.2785)
@@ -173,3 +174,58 @@ def test_hypocentral_distance_accounts_for_depth():
     assert result.loc[0, "epicentral_distance_km"] == pytest.approx(0, abs=0.1)
     assert result.loc[0, "hypocentral_distance_km"] == pytest.approx(30, abs=0.1)
     assert result.loc[0, "log_hypocentral_distance"] == pytest.approx(np.log10(30), abs=1e-6)
+
+
+# --- vs30 being optional, which the README promises --------------------------
+
+def _cells(n=6):
+    return pd.DataFrame({
+        "cell_easting": np.linspace(1.6e6, 1.7e6, n),
+        "cell_northing": np.linspace(5.4e6, 5.5e6, n),
+    })
+
+
+def test_no_vs30_grid_leaves_the_column_present_but_empty():
+    result = add_vs30(_cells(), None)
+    assert result["vs30"].isna().all()
+    assert not result["vs30_imputed"].any()
+
+
+def test_model_features_drops_a_column_with_no_data():
+    """Without this the pipeline cannot run without vs30, which it advertises."""
+    frame = add_vs30(_cells(), None).assign(
+        magnitude=6.0, depth_km=15.0, log_hypocentral_distance=2.0,
+        azimuth_sin=0.0, azimuth_cos=1.0, local_hour_sin=0.0,
+        local_hour_cos=1.0, is_weekend=0)
+
+    columns = model_features(frame, verbose=False)
+    assert "vs30" not in columns
+    assert set(columns) == set(MODEL_FEATURES) - {"vs30"}
+
+
+def test_model_features_keeps_everything_when_the_data_is_there():
+    frame = pd.DataFrame({column: [1.0, 2.0] for column in MODEL_FEATURES})
+    assert model_features(frame, verbose=False) == MODEL_FEATURES
+
+
+def test_model_features_output_contains_no_missing_columns():
+    """The contract: what comes back can be handed straight to an estimator."""
+    frame = pd.DataFrame({column: [1.0, 2.0] for column in MODEL_FEATURES})
+    frame["vs30"] = [np.nan, np.nan]
+
+    for column in model_features(frame, verbose=False):
+        assert frame[column].notna().all()
+
+
+def test_a_partly_missing_vs30_is_filled_rather_than_left_to_break_a_fit():
+    """A scattering of gaps is a coverage problem, not an absent feature."""
+    cells = _cells(4)
+    # One sample near the first two cells only, so the far ones exceed the cutoff.
+    longitude, latitude = from_nztm(cells["cell_easting"][:1], cells["cell_northing"][:1])
+    grid = pd.DataFrame({"longitude": longitude, "latitude": latitude, "vs30": [400.0]})
+
+    result = add_vs30(cells, grid, max_match_km=5)
+
+    assert result["vs30"].notna().all()      # nothing left for an estimator to trip on
+    assert result["vs30_imputed"].any()      # but the fill is recorded
+    assert not result["vs30_imputed"].all()

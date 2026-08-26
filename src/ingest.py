@@ -71,7 +71,11 @@ def fetch_events(min_magnitude, max_magnitude, start_date, end_date, force=False
         "startdate": start_date,
         "enddate": end_date,
     }
-    cache_name = f"events_{min_magnitude}_{max_magnitude}_{start_date[:10]}_{end_date[:10]}.json"
+    # Formatted rather than interpolated raw, so that fetch_events(6, 8, ...)
+    # and fetch_events(6.0, 8.0, ...) resolve to the same cache file instead of
+    # fetching the identical query twice under two names.
+    cache_name = (f"events_{float(min_magnitude):.1f}_{float(max_magnitude):.1f}"
+                  f"_{start_date[:10]}_{end_date[:10]}.json")
     payload = _get_json(QUAKE_SEARCH_URL, params, EVENTS_DIR / cache_name, force=force)
 
     events = []
@@ -125,6 +129,14 @@ def drop_duplicate_events(events):
     location, differing only in magnitude solution. The highest magnitude is
     kept, on the basis that later revisions tend to refine upward for large
     events.
+
+    On the current New Zealand window this removes nothing, and it is kept as a
+    guard rather than claimed as a finding. The duplicates that do exist in the
+    raw catalogue, such as the three November 2016 entries off Fukushima, are
+    all teleseismic, so filter_to_new_zealand reaches them first. A different
+    date range or a change at GeoNet could put duplicates inside the New
+    Zealand box, and silently training on the same earthquake twice would be
+    worse than an inert filter.
     """
     if events.empty:
         return events
@@ -221,7 +233,6 @@ def fetch_felt_reports(public_id, force=False, warn_out_of_range=True):
             "longitude": longitude,
             "latitude": latitude,
             "report_count": properties.get("count", 0),
-            "geonet_mmi": properties.get("mmi"),
         }
 
         for mmi_value, count in (properties.get("count_mmi") or {}).items():

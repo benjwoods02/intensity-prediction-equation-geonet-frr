@@ -27,7 +27,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt   # notebooks-only deps are excluded
 
       # The suite runs entirely offline. API responses are stubbed and the
       # geospatial and model checks use synthetic data, so a GeoNet outage or

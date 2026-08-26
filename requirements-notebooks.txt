@@ -1,0 +1,4 @@
+# Additionally required to run the notebooks. Not needed by the pipeline or
+# the test suite, so CI does not install it.
+-r requirements.txt
+jupyter>=1.0

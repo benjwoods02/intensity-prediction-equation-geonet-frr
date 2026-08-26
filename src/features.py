@@ -146,7 +146,7 @@ def add_vs30(cells, vs30_grid, max_match_km=VS30_MAX_MATCH_KM):
     missing value rather than a misleading one borrowed from far off.
     """
     if vs30_grid is None or vs30_grid.empty:
-        return cells.assign(vs30=np.nan)
+        return cells.assign(vs30=np.nan, vs30_match_km=np.nan, vs30_imputed=False)
 
     from scipy.spatial import cKDTree
 
@@ -160,7 +160,18 @@ def add_vs30(cells, vs30_grid, max_match_km=VS30_MAX_MATCH_KM):
     values = vs30_grid["vs30"].to_numpy()[indices]
     values = np.where(distances_m / 1000 <= max_match_km, values, np.nan)
 
-    return cells.assign(vs30=values, vs30_match_km=distances_m / 1000)
+    # A handful of unmatched cells is enough to break a fit, because most
+    # estimators reject NaN outright rather than degrading. They are filled
+    # with the median of the cells that did match, which is a weaker and more
+    # honest claim than borrowing a specific value from far away. The flag is
+    # kept so a filled value is never mistaken for a measured one.
+    matched = np.isfinite(values)
+    imputed = ~matched
+    if matched.any() and imputed.any():
+        values = np.where(matched, values, float(np.median(values[matched])))
+
+    return cells.assign(vs30=values, vs30_match_km=distances_m / 1000,
+                        vs30_imputed=imputed)
 
 
 def build_features(cells, events, vs30_grid=None, verbose=True):
@@ -203,6 +214,10 @@ def build_features(cells, events, vs30_grid=None, verbose=True):
 
     if verbose:
         covered = merged["vs30"].notna().mean() * 100
+        filled = int(merged["vs30_imputed"].sum())
+        if filled:
+            print(f"  {filled:,} cells had no vs30 sample within "
+                  f"{VS30_MAX_MATCH_KM:.0f} km and were filled with the median")
         print(f"  {len(merged):,} rows with features")
         print(f"  hypocentral distance {merged['hypocentral_distance_km'].min():.1f} to "
               f"{merged['hypocentral_distance_km'].max():.0f} km")
@@ -222,3 +237,27 @@ MODEL_FEATURES = [
     "is_weekend",
     "vs30",
 ]
+
+
+def model_features(frame, columns=MODEL_FEATURES, verbose=True):
+    """The subset of MODEL_FEATURES a given frame can actually supply.
+
+    Vs30 is optional here. The source grid is third-party data whose
+    redistribution terms are unconfirmed, so it is not committed, and a fresh
+    clone has no site conditions at all. That leaves an all-missing column, and
+    most estimators reject NaN rather than degrading gracefully: without this,
+    running the pipeline without Vs30 fails the fit for most of the bench,
+    including the model this project selects.
+
+    Dropping an entirely absent column is the honest response. A column that is
+    only partly missing is a different case and is filled in add_vs30, because
+    a scattering of gaps is a coverage problem rather than an absent feature.
+    """
+    usable = [column for column in columns
+              if column in frame.columns and frame[column].notna().any()]
+    dropped = [column for column in columns if column not in usable]
+
+    if dropped and verbose:
+        print(f"  dropped, no data available: {', '.join(dropped)}")
+
+    return usable
