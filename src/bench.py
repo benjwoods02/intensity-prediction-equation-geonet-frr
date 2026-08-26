@@ -314,6 +314,39 @@ def _weight_kwargs(estimator, weights):
     return {"sample_weight": weights}
 
 
+def fit_shortlist(names, train, feature_columns, target_column="mmi",
+                  weight_column="weight", random_state=7):
+    """Refit named candidates on the whole training set, for inspection.
+
+    The sweep exists to rank models, so it caps the training rows for the
+    slower families. Anything examined afterwards, mapped or checked for
+    physical behaviour, should be the model you would actually deploy, so it
+    is refitted here on everything rather than reused from the sweep. Of the
+    fourteen most accurate candidates only Gradient Boosting is capped, so in
+    practice this changes one model.
+    """
+    wanted = set(names)
+    fitted = {}
+
+    for candidate in build_registry(random_state):
+        if candidate.name not in wanted:
+            continue
+        try:
+            candidate.estimator.fit(
+                train[feature_columns], train[target_column],
+                **_weight_kwargs(candidate.estimator, train[weight_column]))
+        except TypeError:
+            # Not every estimator accepts sample weights.
+            candidate.estimator.fit(train[feature_columns], train[target_column])
+        fitted[candidate.name] = candidate
+
+    missing = wanted - set(fitted)
+    if missing:
+        raise KeyError(f"not in the registry: {sorted(missing)}")
+
+    return fitted
+
+
 def run_bench(train, test, feature_columns, candidates=None, random_state=7,
               class_weighted=False, verbose=True):
     """Run every candidate and return one comparison table.

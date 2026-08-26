@@ -12,20 +12,33 @@ past a handful of models, and it cannot be repeated by anyone else. Here the
 same judgement is made numerically, so every candidate faces the same test and
 the result is reproducible.
 
-Two tools:
+Three tools:
 
-  radial_profile   Holds an earthquake fixed and sweeps distance outwards,
-                   averaging over compass directions so a single unlucky
-                   bearing cannot decide the answer. This isolates the
-                   distance response from everything else.
+  radial_profile     Holds an earthquake fixed and sweeps distance outwards,
+                     averaging over compass directions so a single unlucky
+                     bearing cannot decide the answer. This isolates the
+                     distance response from everything else.
 
-  shake_map        Predicts across a grid covering the country, for the
-                   picture a person actually reads.
+  far_field_check    Looks at each bearing on its own instead, asking whether
+                     anywhere far from the earthquake shakes harder than the
+                     ground above it. Averaging is right for measuring the
+                     shape of a decay and wrong for catching a blow-up in one
+                     direction, so both are needed.
 
-A model is judged on whether its radial profile falls, and by how cleanly.
-Failing this is disqualifying regardless of error metrics, because a map that
-shows shaking increasing with distance is worse than useless: it would send
-people to the wrong places.
+  shake_map          Predicts across a grid covering the country, for the
+                     picture a person actually reads.
+
+A model is judged on whether its radial profile falls, how cleanly, and
+whether it keeps falling all the way out. Failing this is disqualifying
+regardless of error metrics, because a map that shows shaking increasing with
+distance is worse than useless: it would send people to the wrong places.
+
+One caution, learned the hard way. Replacing the eyeball check with numbers is
+the right move, but it does not retire the pictures. This module first swept
+only to 400 km, a little under half the length of New Zealand, and passed a
+model that predicts MMI 8 in Northland for a Kaikoura earthquake. Nothing in
+the numbers said so; drawing every candidate's map in src/maps.py did. The
+numbers are the test, and the maps are how you audit the test.
 """
 
 import numpy as np
@@ -37,6 +50,17 @@ from features import encode_circular
 from models import expected_mmi
 
 MMI_CLASSES = np.arange(3, 9)
+
+# How far the checks sweep. New Zealand's longest internal distance is about
+# 900 km, Cape Reinga to Stewart Island, so a check that stops short of that
+# leaves part of every shake map unexamined. An earlier version stopped at
+# 400 km and passed a model that predicts MMI 8 in Northland for a Kaikoura
+# earthquake, which the maps caught and the numbers did not.
+PROFILE_DISTANCES_KM = (5.0, 900.0)
+
+# Boundaries for the far field check below.
+NEAR_FIELD_KM = 50.0
+FAR_FIELD_KM = 400.0
 
 # Held constant while distance is swept, so only distance moves. Values are
 # typical rather than extreme: a median site, early afternoon on a weekday.
@@ -94,7 +118,7 @@ def radial_profile(model, feature_columns, magnitude=6.0, depth_km=15.0,
     testing a single bearing would report whichever it happened to pick.
     """
     if distances_km is None:
-        distances_km = np.geomspace(5, 400, 40)
+        distances_km = np.geomspace(*PROFILE_DISTANCES_KM, 40)
 
     azimuths = np.linspace(0, 360, n_azimuths, endpoint=False)
     frame = _feature_frame(distances_km, magnitude, depth_km, azimuths, conditions)
@@ -142,6 +166,47 @@ def attenuation_check(profile):
     }
 
 
+def far_field_check(model, feature_columns, magnitude=6.0, depth_km=15.0,
+                    kind="classification", n_azimuths=24, conditions=None):
+    """Look for strong shaking a long way from the earthquake.
+
+    attenuation_check averages over compass bearings before scoring, which is
+    right for measuring the shape of the decay: a model given azimuth features
+    may legitimately fall faster in one direction than another, and one bearing
+    should not decide the verdict on that. But averaging also hides the
+    opposite problem. A model that behaves in twenty-three directions and
+    predicts MMI 8 in the twenty-fourth still averages to something reasonable,
+    while the map it draws is indefensible.
+
+    So this looks at each bearing on its own and asks a blunter question: does
+    anywhere beyond FAR_FIELD_KM shake harder than the ground above the
+    hypocentre. There is no reading of attenuation under which that is
+    possible.
+    """
+    distances = np.geomspace(*PROFILE_DISTANCES_KM, 40)
+    azimuths = np.linspace(0, 360, n_azimuths, endpoint=False)
+    frame = _feature_frame(distances, magnitude, depth_km, azimuths, conditions)
+
+    frame["predicted_mmi"] = predict_intensity(model, frame[feature_columns], kind=kind)
+    frame["bearing"] = np.repeat(azimuths, len(distances))
+
+    near = frame[frame["epicentral_distance_km"] <= NEAR_FIELD_KM]
+    far = frame[frame["epicentral_distance_km"] > FAR_FIELD_KM]
+
+    if near.empty or far.empty:
+        return {"near_field": np.nan, "max_far_field": np.nan,
+                "worst_bearing": np.nan, "far_field_excess": 0.0}
+
+    worst = far.loc[far["predicted_mmi"].idxmax()]
+
+    return {
+        "near_field": float(near["predicted_mmi"].mean()),
+        "max_far_field": float(worst["predicted_mmi"]),
+        "worst_bearing": float(worst["bearing"]),
+        "far_field_excess": float(worst["predicted_mmi"] - near["predicted_mmi"].mean()),
+    }
+
+
 def physical_plausibility(model, feature_columns, kind="classification",
                           magnitudes=(4.5, 5.5, 6.5, 7.5), depth_km=15.0):
     """Run the attenuation check across several magnitudes.
@@ -154,15 +219,22 @@ def physical_plausibility(model, feature_columns, kind="classification",
     for magnitude in magnitudes:
         profile = radial_profile(model, feature_columns, magnitude=magnitude,
                                  depth_km=depth_km, kind=kind)
-        rows.append({"magnitude": magnitude, **attenuation_check(profile)})
+        rows.append({"magnitude": magnitude,
+                     **attenuation_check(profile),
+                     **far_field_check(model, feature_columns, magnitude=magnitude,
+                                       depth_km=depth_km, kind=kind)})
 
     table = pd.DataFrame(rows)
+    worst_far_field = table.loc[table["far_field_excess"].idxmax()]
 
     return {
         "worst_spearman": float(table["spearman"].max()),
         "mean_fraction_decreasing": float(table["fraction_decreasing"].mean()),
         "mean_total_drop": float(table["total_drop"].mean()),
         "monotonic_at_all_magnitudes": bool(table["monotonic"].all()),
+        "far_field_excess": float(worst_far_field["far_field_excess"]),
+        "max_far_field": float(worst_far_field["max_far_field"]),
+        "near_field": float(worst_far_field["near_field"]),
         "by_magnitude": table,
     }
 
@@ -243,6 +315,19 @@ MINIMUM_SPEARMAN = -0.95
 MINIMUM_FRACTION_DECREASING = 0.90
 MINIMUM_TOTAL_DROP = 0.5
 
+# Nowhere beyond FAR_FIELD_KM should shake harder than the ground above the
+# hypocentre. The allowance is one full intensity level rather than zero, for
+# the same reason strict monotonicity is not the test above: measured against
+# a piecewise constant surface sitting on its floor, small positive excesses
+# are noise. They appear only at magnitude 4.5, where nothing is felt at 400 km
+# in the first place, and they vanish at every larger magnitude. MMI is also
+# reported as whole numbers, so a difference under one unit is finer than the
+# scale itself resolves.
+#
+# The separation is not close. Genuine far field blow-ups measure 3 to 4 units
+# of excess at every magnitude; the artefacts measure under 0.6 at one.
+MAXIMUM_FAR_FIELD_EXCESS = 1.0
+
 
 def plausibility_verdict(summary):
     """Decide whether a model's attenuation behaviour is acceptable.
@@ -266,5 +351,10 @@ def plausibility_verdict(summary):
         reasons.append(
             f"barely varies across the country (drops only "
             f"{summary['mean_total_drop']:.2f} MMI)")
+
+    if summary.get("far_field_excess", 0.0) > MAXIMUM_FAR_FIELD_EXCESS:
+        reasons.append(
+            f"distant hotspot (MMI {summary['max_far_field']:.2f} beyond "
+            f"{FAR_FIELD_KM:.0f} km against {summary['near_field']:.2f} at the source)")
 
     return {"passes": not reasons, "reasons": reasons}

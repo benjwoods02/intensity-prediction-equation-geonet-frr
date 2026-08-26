@@ -25,11 +25,13 @@ GeoNet's Felt RAPID Report survey asks the public which of six cartoons best mat
 
 A model can score well on held out data and still be wrong in a way no metric catches. Shaking must weaken with distance from an earthquake, but nothing in a loss function says so.
 
-Holding an earthquake fixed and sweeping distance outwards, averaged over eight compass bearings, shows that only 4 of the 14 most accurate models produce physically possible attenuation. The most accurate model of all is among the failures: its predictions do not fall reliably with distance, so its shake maps would mislead.
+Holding an earthquake fixed and sweeping distance outwards shows that only 2 of the 14 most accurate models produce physically possible attenuation. The most accurate model of all is among the failures: its predictions do not fall reliably with distance, so its shake maps would mislead.
 
 Selecting on physics first costs about 10% of accuracy and buys a model whose output can be acted on.
 
-Strict monotonicity turns out to be the wrong test. The only strictly monotonic candidates are shallow decision trees, and they qualify because they are nearly flat, dropping 0.4 MMI across the whole country. The test used instead asks for a strong downward trend, few reversals, and enough range to be worth mapping.
+![Shake maps for all fourteen candidates](maps/contact-sheet.png)
+
+Green passed, red was rejected. Two of these fourteen are usable.
 
 ## Results
 
@@ -38,10 +40,20 @@ Selected model: Gradient Boosting Regressor.
 | | Selected | Most accurate | Attenuation equation | Constant |
 |---|---:|---:|---:|---:|
 | Cell MAE | 0.369 | 0.337 | 0.545 | 0.590 |
-| Worst Spearman | -0.969 | -0.881 | | |
+| Worst Spearman | -0.980 | -0.899 | | |
 | Physically plausible | yes | no | yes | no |
 
-Two findings beyond the ranking.
+Three findings beyond the ranking.
+
+### The numeric check had a hole in it, and the maps found it
+
+The screening described above replaced the eyeball check the original version of this project used, because looking at maps does not scale past a handful of candidates and cannot be repeated by anyone else. That was the right move, and it was not the end of it.
+
+The check swept distance from 5 km to 400 km. New Zealand is 900 km long. Drawing the maps for every candidate showed a model that had passed cleanly, at a rank correlation of -0.987, predicting the top of the intensity scale across Northland for a Kaikoura earthquake 780 km away, in the part of the map the check never looked at. It had been cited as evidence that constraining tree depth improves physical behaviour. It was scoring well on the half of the range that was being examined.
+
+Two changes followed. The sweep now covers the full length of the country, and a second check looks at each compass bearing separately rather than averaging them, because averaging hides a model that behaves in twenty-three directions and predicts MMI 8 in the twenty-fourth. The pass count fell from 4 to 2. The selected model did not change.
+
+The numbers are the test. The pictures are how you find out the test has a hole in it.
 
 ### The usual headline metric is broken
 
@@ -55,7 +67,7 @@ That is enough to reverse the ranking between a real model and none. Scored the 
 
 MMI 7 and above is 1.3% of reports, so the most likely single level is essentially never 7 or 8 and per-class recall reads as zero for every candidate. Measured as a ranking problem instead, the leading models reach ROC AUC around 0.79 to 0.80 for identifying MMI 6 and above. They rank damaging cells higher; they just cannot name them.
 
-Precision is capped by the base rate rather than by ranking quality, which is the clearest argument in this project for bringing instrumental measurements alongside felt reports.
+The contact sheet above shows the same thing from another angle: most panels stay pale even at the epicentre of a magnitude 7.8 earthquake, because most of these models never predict strong shaking anywhere. Precision is capped by the base rate rather than by ranking quality, which is the clearest argument in this project for bringing instrumental measurements alongside felt reports.
 
 ## Notebooks
 
@@ -67,6 +79,16 @@ Precision is capped by the base rate rather than by ranking quality, which is th
 | 4 | [04_physical_validation.ipynb](notebooks/04_physical_validation.ipynb) | Screening for physically possible attenuation, and the final selection |
 
 Start with [04](notebooks/04_physical_validation.ipynb) if you only read one.
+
+## Maps
+
+`python src/maps.py` regenerates every shake map into [maps/](maps/):
+
+- [contact-sheet.png](maps/contact-sheet.png), all fourteen candidates on one page
+- [selected-vs-rejected.png](maps/selected-vs-rejected.png), the two that matter side by side
+- [maps/models/](maps/models/), one map per candidate in accuracy order
+
+All are drawn for the same earthquake on the same fixed MMI scale, so the panels can be compared directly. Predictions are masked to land using a simplified Natural Earth coastline committed under [assets/](assets/), so the maps render offline like everything else here.
 
 ## Data quality problems worth noting
 
@@ -81,9 +103,11 @@ Five were found and handled, each documented in the notebooks:
 ## Repository layout
 
 ```
-src/         pipeline modules: ingest, clean, features, models, bench, spatial
+src/         pipeline modules: ingest, clean, features, models, bench, spatial, maps
 notebooks/   the analysis, four notebooks in order
-tests/       101 tests, entirely offline
+tests/       107 tests, entirely offline
+maps/        rendered shake maps, one per candidate
+assets/      simplified NZ coastline, for masking maps to land
 ```
 
 ## Running it
@@ -100,7 +124,9 @@ Vs30 site condition data is optional and not redistributed here; the pipeline ru
 
 ## Tests
 
-101 tests, run on Python 3.11, 3.12 and 3.13 by GitHub Actions, with a second pass promoting deprecation warnings to errors. The suite is entirely offline: API responses are stubbed and the geospatial and model checks use synthetic data, so a GeoNet outage cannot turn the build red for reasons unrelated to the code.
+107 tests, run on Python 3.11, 3.12 and 3.13 by GitHub Actions, with a second pass promoting deprecation warnings to errors. The suite is entirely offline: API responses are stubbed and the geospatial and model checks use synthetic data, so a GeoNet outage cannot turn the build red for reasons unrelated to the code.
+
+Six of those tests exist because of the far-field bug above. One of them builds a model that attenuates correctly to 400 km and then jumps to MMI 8, and asserts that the old truncated sweep would have accepted it.
 
 ## Context
 
@@ -108,4 +134,4 @@ This is a full rebuild, written independently, of a problem first worked on as a
 
 ## Data source
 
-[GeoNet Felt RAPID Reports](https://api.geonet.org.nz/) and the [GeoNet quake search API](https://quakesearch.geonet.org.nz/), both publicly available.
+[GeoNet Felt RAPID Reports](https://api.geonet.org.nz/) and the [GeoNet quake search API](https://quakesearch.geonet.org.nz/), both publicly available. Coastline from [Natural Earth](https://www.naturalearthdata.com/), public domain.

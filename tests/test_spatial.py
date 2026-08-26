@@ -49,6 +49,31 @@ def nearly_flat(log_distance):
     return 4.5 - 0.02 * log_distance
 
 
+def distant_hotspot(log_distance):
+    """Attenuates correctly, then predicts severe shaking at the far edge.
+
+    This is the failure that got through. The sweep used to stop at 400 km, so
+    everything this model does past that point went unexamined, and it was
+    accepted on the strength of the part that behaved. The maps showed MMI 8
+    across Northland for a Kaikoura earthquake.
+    """
+    return np.where(log_distance > 2.7, 8.0, 8.0 - 1.5 * log_distance)
+
+
+class DirectionalBlowUp:
+    """Attenuates properly in every direction but one.
+
+    Averaging over bearings dilutes this to something that still trends
+    downwards, so the shape checks accept it. The map does not.
+    """
+
+    def predict(self, X):
+        base = 8.0 - 1.5 * X["log_hypocentral_distance"]
+        due_north = np.asarray(X["azimuth_cos"]) > 0.99
+        far = np.asarray(X["log_hypocentral_distance"]) > 2.7
+        return np.where(due_north & far, 8.0, base)
+
+
 def profile_for(rule):
     return S.radial_profile(FakeRegressor(rule), MODEL_FEATURES, kind="regression")
 
@@ -172,3 +197,58 @@ def test_shake_map_is_strongest_near_the_epicentre():
     nearest = mapped.nsmallest(20, "epicentral_distance_km")["predicted_mmi"].mean()
     furthest = mapped.nlargest(20, "epicentral_distance_km")["predicted_mmi"].mean()
     assert nearest > furthest
+
+
+# --- the far field, which the shape checks alone do not cover -----------------
+
+def test_sweep_covers_the_whole_country():
+    """A check that stops short of 900 km leaves part of every map untested."""
+    profile = profile_for(sensible_attenuation)
+    assert profile["epicentral_distance_km"].max() >= 900
+
+
+def test_distant_hotspot_would_have_passed_the_old_short_sweep():
+    """Documents the bug: truncated at 400 km, this model looks perfect."""
+    truncated = S.radial_profile(FakeRegressor(distant_hotspot), MODEL_FEATURES,
+                                 distances_km=np.geomspace(5, 400, 40),
+                                 kind="regression")
+    result = S.attenuation_check(truncated)
+    assert result["spearman"] < S.MINIMUM_SPEARMAN
+    assert result["total_drop"] > S.MINIMUM_TOTAL_DROP
+
+
+def test_distant_hotspot_is_caught():
+    summary = S.physical_plausibility(FakeRegressor(distant_hotspot),
+                                      MODEL_FEATURES, kind="regression")
+    verdict = S.plausibility_verdict(summary)
+    assert not verdict["passes"]
+    assert any("distant hotspot" in reason for reason in verdict["reasons"])
+
+
+def test_one_bad_bearing_is_caught_even_though_the_average_is_fine():
+    """The case bearing-averaging is blind to."""
+    model = DirectionalBlowUp()
+
+    averaged = S.attenuation_check(
+        S.radial_profile(model, MODEL_FEATURES, kind="regression"))
+    assert averaged["spearman"] < S.MINIMUM_SPEARMAN  # the shape check is happy
+
+    verdict = S.plausibility_verdict(
+        S.physical_plausibility(model, MODEL_FEATURES, kind="regression"))
+    assert not verdict["passes"]
+    assert any("distant hotspot" in reason for reason in verdict["reasons"])
+
+
+def test_a_sound_model_has_no_far_field_excess():
+    result = S.far_field_check(FakeRegressor(sensible_attenuation),
+                               MODEL_FEATURES, kind="regression")
+    assert result["max_far_field"] < result["near_field"]
+    assert result["far_field_excess"] < 0
+
+
+def test_far_field_reason_names_the_numbers():
+    summary = S.physical_plausibility(FakeRegressor(distant_hotspot),
+                                      MODEL_FEATURES, kind="regression")
+    reason = next(r for r in S.plausibility_verdict(summary)["reasons"]
+                  if "distant hotspot" in r)
+    assert "8.00" in reason and "400 km" in reason
