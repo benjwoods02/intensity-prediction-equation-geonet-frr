@@ -8,7 +8,7 @@ The four notebooks run end to end from the public GeoNet APIs. Nothing is read f
 
 ## The problem
 
-Intensity prediction equations estimate how strongly an earthquake is felt at a given location, which supports rapid post-event assessment and earthquake risk modelling. New Zealand's official equations rely on rupture plane geometry that is not available immediately after an event.
+Intensity prediction equations estimate how strongly an earthquake is felt at a given location, which supports rapid post-event assessment and earthquake risk modelling.
 
 GeoNet's Felt RAPID Report survey asks the public which of six cartoons best matches what they experienced, mapping to MMI 3 through 8. This project asks whether that crowdsourced data alone can produce a usable and physically sensible intensity prediction equation.
 
@@ -21,13 +21,13 @@ GeoNet's Felt RAPID Report survey asks the public which of six cartoons best mat
 - Splits are by earthquake rather than by row, and stratified by magnitude. Most features are properties of an event, so 24,241 cells carry only 95 independent observations of them.
 - 44 models compared on identical terms, then screened for physical plausibility.
 
-## The interesting part
+## Physical sanity check
 
 A model can score well on held out data and still be wrong in a way no metric catches. Shaking must weaken with distance from an earthquake, but nothing in a loss function says so.
 
-Holding an earthquake fixed and sweeping distance outwards shows that only 2 of the 14 most accurate models produce physically possible attenuation. The most accurate model of all is among the failures: its predictions do not fall reliably with distance, so its shake maps would mislead.
+Holding an earthquake fixed and sweeping distance outwards shows that only 2 of the 14 most accurate models produce physically possible attenuation. The model with the best metrics is among the failures: its predictions do not fall reliably with distance, so its shake maps would mislead.
 
-Selecting on physics first costs about 10% of accuracy and buys a model whose output can be acted on.
+Selecting on physics first costs about 10% of accuracy for a model with output that makes physical sense.
 
 ![Shake maps for all fourteen candidates](maps/contact-sheet.png)
 
@@ -35,33 +35,15 @@ Green passed, red was rejected. Two of these fourteen are usable.
 
 ## Results
 
-Selected model: Gradient Boosting Regressor.
+Selected model: Gradient Boosting Regressor. The most accurate of all 44,
+Hist Gradient Boosting Regressor, is rejected below.
 
 | | Selected | Most accurate | Attenuation equation | Constant |
 |---|---:|---:|---:|---:|
 | Cell MAE | 0.369 | 0.337 | 0.545 | 0.590 |
-| Worst Spearman | -0.980 | -0.899 | | |
+| Worst Spearman | -0.980 | -0.899 | -1.000 | n/a |
 | Physically plausible | yes | no | yes | no |
 
-Three findings beyond the ranking.
-
-### The numeric check had a hole in it, and the maps found it
-
-The screening described above replaced the eyeball check the original version of this project used, because looking at maps does not scale past a handful of candidates and cannot be repeated by anyone else. That was the right move, and it was not the end of it.
-
-The check swept distance from 5 km to 400 km. New Zealand is 900 km long. Drawing the maps for every candidate showed a model that had passed cleanly, at a rank correlation of -0.987, predicting the top of the intensity scale across Northland for a Kaikoura earthquake 780 km away, in the part of the map the check never looked at. It had been cited as evidence that constraining tree depth improves physical behaviour. It was scoring well on the half of the range that was being examined.
-
-Two changes followed. The sweep now covers the full length of the country, and a second check looks at each compass bearing separately rather than averaging them, because averaging hides a model that behaves in twenty-three directions and predicts MMI 8 in the twenty-fourth. The pass count fell from 4 to 2. The selected model did not change.
-
-The numbers are the test. The pictures are how you find out the test has a hole in it.
-
-### The usual headline metric is broken
-
-Intensity work normally quotes the percentage of predictions within one MMI unit. Against continuous predictions it measures the wrong thing.
-
-MMI 3, 4 and 5 are 90.6% of all reports, so predicting exactly 4.0 sits within one unit of almost everything. Moving that prediction to 4.2 costs 9% in mean absolute error and 34% in within-1, because 4.2 now falls more than a unit from MMI 3. The metric collapses the moment a prediction stops being an integer, so it measures integer-ness rather than closeness.
-
-That is enough to reverse the ranking between a real model and none. Scored the way the literature normally scores it, the selected model reaches 0.739 against 0.876 for a constant 4.0, even though its error is genuinely lower (report MAE 0.719 against 0.800). Mean absolute error and the Ranked Probability Score are used instead, with within-1 kept on rounded predictions where it is at least comparable.
 
 ### No model can name damaging shaking, but the leaders can rank it
 
@@ -100,8 +82,6 @@ Five were found and handled, each documented in the notebooks:
 - Out-of-scale intensities. The survey produces MMI 3 to 8, but the archive holds a handful of MMI 1 and 2 reports.
 - Event misattribution during aftershock sequences. Magnitude 4 to 5 events appear to produce rising intensity with distance, which is impossible. The far-field cells trace to two November 2016 Kaikoura aftershocks, where people could not tell which shake they were reporting.
 
-Duplicate magnitude solutions exist in the raw catalogue too, several entries for one physical earthquake, but in this window they are all teleseismic and the New Zealand filter reaches them first. The deduplication step therefore removes nothing and is kept as a guard rather than counted above.
-
 ## Repository layout
 
 ```
@@ -126,11 +106,6 @@ Run the notebooks in order. Notebook 01 fetches from the GeoNet APIs and caches 
 
 Vs30 site condition data is not redistributed here, because the source grid's terms are unconfirmed. It is genuinely optional: `model_features` drops any feature the data cannot supply, so a clone without it trains on the remaining eight and every model in the bench still fits. Partial gaps are a different case and are filled with the median of the cells that did match, flagged so a filled value is never mistaken for a measured one.
 
-## Tests
-
-153 tests, one file per module, run on Python 3.11, 3.12 and 3.13 by GitHub Actions, with a second pass promoting deprecation warnings to errors. The suite is entirely offline: API responses are stubbed and the geospatial and model checks use synthetic data, so a GeoNet outage cannot turn the build red for reasons unrelated to the code.
-
-Several exist because of specific mistakes. One builds a model that attenuates correctly to 400 km and then jumps to MMI 8, and asserts that the old truncated sweep would have accepted it. Another checks a list of New Zealand cities against the coastline mask, because at a coarser simplification the Auckland isthmus vanished and put the country's largest city in the sea on every map.
 
 ## Context
 

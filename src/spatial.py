@@ -8,22 +8,16 @@ loss function tells it that distance has a direction.
 
 This is the check the original project made by eye, generating shake maps for
 each candidate and looking at them. Two problems with that. It does not scale
-past a handful of models, and it cannot be repeated by anyone else. Here the
-same judgement is made numerically, so every candidate faces the same test and
-the result is reproducible.
+past a handful of models, and it cannot be repeated easilty without bias.
 
 Three tools:
 
   radial_profile     Holds an earthquake fixed and sweeps distance outwards,
-                     averaging over compass directions so a single unlucky
-                     bearing cannot decide the answer. This isolates the
-                     distance response from everything else.
+                     averaging over compass directions.
 
   far_field_check    Looks at each bearing on its own instead, asking whether
                      anywhere far from the earthquake shakes harder than the
-                     ground above it. Averaging is right for measuring the
-                     shape of a decay and wrong for catching a blow-up in one
-                     direction, so both are needed.
+                     ground above it.
 
   shake_map          Predicts across a grid covering the country, for the
                      picture a person actually reads.
@@ -31,14 +25,9 @@ Three tools:
 A model is judged on whether its radial profile falls, how cleanly, and
 whether it keeps falling all the way out. Failing this is disqualifying
 regardless of error metrics, because a map that shows shaking increasing with
-distance is worse than useless: it would send people to the wrong places.
+distance is worse than useless.
 
-One caution, learned the hard way. Replacing the eyeball check with numbers is
-the right move, but it does not retire the pictures. This module first swept
-only to 400 km, a little under half the length of New Zealand, and passed a
-model that predicts MMI 8 in Northland for a Kaikoura earthquake. Nothing in
-the numbers said so; drawing every candidate's map in src/maps.py did. The
-numbers are the test, and the maps are how you audit the test.
+Replacing the eyeball check with numbers does not retire the pictures.
 """
 
 import numpy as np
@@ -62,8 +51,6 @@ PROFILE_DISTANCES_KM = (5.0, 900.0)
 NEAR_FIELD_KM = 50.0
 FAR_FIELD_KM = 400.0
 
-# Held constant while distance is swept, so only distance moves. Values are
-# typical rather than extreme: a median site, early afternoon on a weekday.
 REFERENCE_CONDITIONS = {
     "vs30": 400.0,
     "local_hour": 14.0,
@@ -169,19 +156,6 @@ def attenuation_check(profile):
 def far_field_check(model, feature_columns, magnitude=6.0, depth_km=15.0,
                     kind="classification", n_azimuths=24, conditions=None):
     """Look for strong shaking a long way from the earthquake.
-
-    attenuation_check averages over compass bearings before scoring, which is
-    right for measuring the shape of the decay: a model given azimuth features
-    may legitimately fall faster in one direction than another, and one bearing
-    should not decide the verdict on that. But averaging also hides the
-    opposite problem. A model that behaves in twenty-three directions and
-    predicts MMI 8 in the twenty-fourth still averages to something reasonable,
-    while the map it draws is indefensible.
-
-    So this looks at each bearing on its own and asks a blunter question: does
-    anywhere beyond FAR_FIELD_KM shake harder than the ground above the
-    hypocentre. There is no reading of attenuation under which that is
-    possible.
     """
     distances = np.geomspace(*PROFILE_DISTANCES_KM, 40)
     azimuths = np.linspace(0, 360, n_azimuths, endpoint=False)
@@ -212,8 +186,7 @@ def physical_plausibility(model, feature_columns, kind="classification",
     """Run the attenuation check across several magnitudes.
 
     A model can behave for a moderate earthquake and misbehave for a large one,
-    usually because it saw few large events in training. Testing one magnitude
-    would hide that.
+    usually because it saw few large events in training.
     """
     rows = []
     for magnitude in magnitudes:
@@ -298,42 +271,20 @@ def shake_map(model, feature_columns, event, grid=None, kind="classification",
     return frame
 
 
-# Thresholds for accepting a model as physically plausible. Chosen after
-# looking at how the candidates actually behave, and deliberately not set at
-# strict monotonicity.
-#
-# Requiring every single step to decrease sounds right and is the wrong test.
-# Tree ensembles predict piecewise constant surfaces, so their profiles wobble
-# by thousandths of an MMI unit between neighbouring distances while falling
-# cleanly overall. That test passes only shallow decision trees, whose profiles
-# are monotonic because they are nearly flat: they drop about 0.4 MMI across
-# the entire country and would produce a shake map that says almost nothing.
-#
-# So the test is on the shape of the decay rather than its every step: a strong
-# overall downward trend, few reversals, and enough range to be worth mapping.
 MINIMUM_SPEARMAN = -0.95
 MINIMUM_FRACTION_DECREASING = 0.90
 MINIMUM_TOTAL_DROP = 0.5
 
 # Nowhere beyond FAR_FIELD_KM should shake harder than the ground above the
-# hypocentre. The allowance is one full intensity level rather than zero, for
-# the same reason strict monotonicity is not the test above: measured against
-# a piecewise constant surface sitting on its floor, small positive excesses
-# are noise. They appear only at magnitude 4.5, where nothing is felt at 400 km
-# in the first place, and they vanish at every larger magnitude. MMI is also
-# reported as whole numbers, so a difference under one unit is finer than the
-# scale itself resolves.
-#
-# The separation is not close. Genuine far field blow-ups measure 3 to 4 units
-# of excess at every magnitude; the artefacts measure under 0.6 at one.
+# hypocentre. The allowance is one full intensity level rather than zero.
+
 MAXIMUM_FAR_FIELD_EXCESS = 1.0
 
 
 def plausibility_verdict(summary):
     """Decide whether a model's attenuation behaviour is acceptable.
 
-    Returns the verdict and the reasons, so a rejection can be explained
-    rather than asserted.
+    Returns the verdict and the reasons, so a rejection can be explained.
     """
     reasons = []
 

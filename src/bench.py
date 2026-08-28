@@ -1,36 +1,13 @@
 """A repeatable bench for comparing many models on identical terms.
 
 Every candidate sees the same split, the same features and the same sample
-weights, and is scored with the same metrics. That is the only way a
-comparison across thirty-odd models means anything: if two models differ in
-how they were fitted as well as in what they are, the ranking says nothing.
+weights, and is scored with the same metrics.
 
 Both classification and regression candidates are included. The project frames
 the problem as ordinal classification, so a classifier's predicted
 probabilities are collapsed to an expected intensity, which puts it on the
 same continuous scale as a regressor and the baseline. Regressors are kept in
-the comparison because the classical attenuation equation is one, and it would
-be dishonest to exclude the family the benchmark belongs to.
-
-A warning about the headline metric. "Within 1 MMI" looks like the natural
-score for this problem and it is what the literature usually quotes, but it
-behaves badly against continuous predictions. MMI 3, 4 and 5 account for 90.6%
-of all reports, so a prediction of exactly 4.0 is within one unit of almost
-everything and scores 0.898. Moving that prediction to 4.2 costs 9% in mean
-absolute error and 34% in within-1, because 4.2 falls more than one unit from
-MMI 3. The metric collapses the moment a prediction stops being an integer, so
-what it measures is integer-ness rather than closeness.
-
-That is enough to reverse the ranking between a real model and none: scored
-this way the selected model reaches 0.739 against 0.876 for a constant 4.0,
-despite lower error on every other measure. Mean absolute error is the primary
-score here for that reason, with within-1 reported on rounded predictions,
-where both sides are integers and the comparison is at least fair.
-
-Some estimators do not scale to tens of thousands of rows. Rather than
-silently dropping them or letting the bench hang, those carry a training row
-cap and the cap is reported alongside their scores, so a good result from a
-subsampled fit is never mistaken for a like-for-like one.
+the comparison because the classical attenuation equation is one.
 """
 
 import time
@@ -95,11 +72,6 @@ def _polynomial(estimator, degree=2):
 
 def build_registry(random_state=7):
     """The candidate list.
-
-    Chosen to span model families rather than to pile up variants of whatever
-    happens to win: linear, discriminant, naive Bayes, distance based, tree
-    based, boosted, and neural. If a family does well for a reason, that is
-    more informative than a leaderboard of near-identical gradient boosters.
     """
     seed = random_state
     candidates = [
@@ -220,12 +192,6 @@ def build_registry(random_state=7):
 
 def _subsample(train, cap, weight_column, random_state):
     """Take a plain random sample of the training rows, for models that cannot scale.
-
-    Sampling is uniform rather than weighted. The sample weights are still
-    passed to fit, so a cell's influence is preserved among the rows that
-    survive; drawing the subsample by weight as well would apply the weighting
-    twice. It also fails outright, because weighted sampling without
-    replacement is not always possible for a given set of weights.
     """
     if cap is None or len(train) <= cap:
         return train, False
@@ -323,13 +289,6 @@ def _weight_kwargs(estimator, weights):
 def fit_shortlist(names, train, feature_columns, target_column="mmi",
                   weight_column="weight", random_state=7):
     """Refit named candidates on the whole training set, for inspection.
-
-    The sweep exists to rank models, so it caps the training rows for the
-    slower families. Anything examined afterwards, mapped or checked for
-    physical behaviour, should be the model you would actually deploy, so it
-    is refitted here on everything rather than reused from the sweep. Of the
-    fourteen most accurate candidates only Gradient Boosting is capped, so in
-    practice this changes one model.
     """
     wanted = set(names)
     fitted = {}

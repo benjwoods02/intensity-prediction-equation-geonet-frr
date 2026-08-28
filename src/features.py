@@ -2,21 +2,20 @@
 
 Three groups of feature are built here.
 
-Physical. Distance from the source, magnitude and depth are what any
-attenuation relation is built on. Distance is measured to the hypocentre
-rather than the epicentre, because a shallow event and a deep one at the same
-map distance do not shake the surface equally, and it is taken as a base-ten
-logarithm because intensity falls off roughly with the logarithm of distance.
+Physical:
+    -Distance from the source. Measured to the hypocentre. Taken as a base-ten
+    log
+    -Magnitude
+    -Depth
 
-Directional. Rupture is not symmetric, so shaking can be stronger along the
-direction a fault tears than across it. Azimuth from the epicentre to the cell
-captures that possibility.
+Directional:
+    -Azimuth from epicenter to cell captures asymmetric rupture.
 
-Reporting behaviour. Felt reports are filed by people, so the data records not
-only how hard the ground shook but how many people were awake, indoors and
-inclined to fill in a survey. Time of day and whether it was a weekend are
-included to give the model a chance to account for that, rather than letting
-it leak into the physical terms.
+Reporting behaviour: Felt reports are filed by people, so the data records not
+only how hard the ground shook but how many people were awake, and
+inclined to fill in a survey.
+    -Time of day
+    -Weekend or not
 
 Both azimuth and time of day are circular: 359 degrees is adjacent to 1
 degree, and 23:00 is adjacent to 00:00. Feeding either in as a raw number
@@ -42,9 +41,6 @@ VS30_MAX_MATCH_KM = 10.0
 
 def haversine_km(longitude_a, latitude_a, longitude_b, latitude_b):
     """Great-circle distance in kilometres between two sets of coordinates.
-
-    Used in preference to straight-line distance in projected space so the
-    result does not depend on the projection being valid at either point.
     """
     lon_a, lat_a, lon_b, lat_b = map(
         lambda values: np.radians(np.asarray(values, dtype="float64")),
@@ -61,9 +57,7 @@ def haversine_km(longitude_a, latitude_a, longitude_b, latitude_b):
 def initial_bearing_degrees(longitude_a, latitude_a, longitude_b, latitude_b):
     """Compass bearing from point A to point B, in degrees clockwise from north.
 
-    This is the forward azimuth along a great circle. Over New Zealand the
-    difference from a simple projected bearing is negligible, but it costs
-    nothing to be correct.
+    This is the forward azimuth along a great circle.
     """
     lon_a, lat_a, lon_b, lat_b = map(
         lambda values: np.radians(np.asarray(values, dtype="float64")),
@@ -79,10 +73,6 @@ def initial_bearing_degrees(longitude_a, latitude_a, longitude_b, latitude_b):
 
 def encode_circular(values, period):
     """Encode a cyclic quantity as a sine and cosine pair.
-
-    A raw angle or hour tells a model that the two ends of the range are far
-    apart when they are in fact adjacent. Projecting onto a circle removes the
-    artificial discontinuity.
     """
     radians = 2 * np.pi * np.asarray(values, dtype="float64") / period
     return np.sin(radians), np.cos(radians)
@@ -90,14 +80,8 @@ def encode_circular(values, period):
 
 def add_local_time_features(frame, time_column="origin_time"):
     """Add local time of day and weekend features from a UTC timestamp.
-
-    Converted to New Zealand local time rather than left in UTC, because what
-    matters is whether people were awake where the shaking happened. The
-    conversion respects daylight saving.
+    This is for reporting behaviour features.
     """
-    # GeoNet timestamps are inconsistent: some carry fractional seconds and
-    # some do not, so a single format string fails once the frame has been
-    # round-tripped through CSV and the values are strings again.
     timestamps = pd.to_datetime(frame[time_column], utc=True, format="mixed")
     local = timestamps.dt.tz_convert(NZ_TIMEZONE)
 
@@ -116,10 +100,6 @@ def load_vs30_grid(path):
     """Read a vs30 point grid, accepting either WKT geometry or plain columns.
 
     Returns None if the file is absent, so the pipeline can run without it.
-    Vs30 describes how soft the ground is, which affects how much shaking is
-    amplified, but the grid used here comes from a third-party source whose
-    redistribution terms are unconfirmed. Treating it as optional keeps the
-    rest of the project reproducible by anyone.
     """
     from pathlib import Path
 
@@ -140,10 +120,9 @@ def load_vs30_grid(path):
 
 def add_vs30(cells, vs30_grid, max_match_km=VS30_MAX_MATCH_KM):
     """Attach the vs30 value of the nearest sample point to each cell.
-
     Matching happens in projected space so that the search distance is in real
-    metres. Cells whose nearest sample is further away than max_match_km get a
-    missing value rather than a misleading one borrowed from far off.
+    metres. Cells whose nearest sample is further away than max_match_km get an
+    average value.
     """
     if vs30_grid is None or vs30_grid.empty:
         return cells.assign(vs30=np.nan, vs30_match_km=np.nan, vs30_imputed=False)
@@ -160,11 +139,6 @@ def add_vs30(cells, vs30_grid, max_match_km=VS30_MAX_MATCH_KM):
     values = vs30_grid["vs30"].to_numpy()[indices]
     values = np.where(distances_m / 1000 <= max_match_km, values, np.nan)
 
-    # A handful of unmatched cells is enough to break a fit, because most
-    # estimators reject NaN outright rather than degrading. They are filled
-    # with the median of the cells that did match, which is a weaker and more
-    # honest claim than borrowing a specific value from far away. The flag is
-    # kept so a filled value is never mistaken for a measured one.
     matched = np.isfinite(values)
     imputed = ~matched
     if matched.any() and imputed.any():
@@ -193,8 +167,6 @@ def build_features(cells, events, vs30_grid=None, verbose=True):
         merged["cell_longitude"], merged["cell_latitude"],
     )
 
-    # Pythagoras through the earth: a cell directly above a 15 km deep event is
-    # 15 km from it, not zero.
     merged["hypocentral_distance_km"] = np.sqrt(
         merged["epicentral_distance_km"] ** 2 + merged["depth_km"] ** 2
     )
@@ -242,16 +214,7 @@ MODEL_FEATURES = [
 def model_features(frame, columns=MODEL_FEATURES, verbose=True):
     """The subset of MODEL_FEATURES a given frame can actually supply.
 
-    Vs30 is optional here. The source grid is third-party data whose
-    redistribution terms are unconfirmed, so it is not committed, and a fresh
-    clone has no site conditions at all. That leaves an all-missing column, and
-    most estimators reject NaN rather than degrading gracefully: without this,
-    running the pipeline without Vs30 fails the fit for most of the bench,
-    including the model this project selects.
-
-    Dropping an entirely absent column is the honest response. A column that is
-    only partly missing is a different case and is filled in add_vs30, because
-    a scattering of gaps is a coverage problem rather than an absent feature.
+    Vs30 is optional here.
     """
     usable = [column for column in columns
               if column in frame.columns and frame[column].notna().any()]

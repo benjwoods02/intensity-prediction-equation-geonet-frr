@@ -5,22 +5,14 @@ Two things happen here.
 Spatial aggregation. GeoNet publishes felt reports as points, but individual
 points are noisy: one person's answer at one address carries no weight on its
 own. Grouping reports into 1 km cells and requiring a minimum number per cell
-trades spatial resolution for a target that means something.
+reduces noise.
 
-The grid is built in NZTM2000 (EPSG:2193) rather than in degrees. A degree of
-latitude is roughly 111 km everywhere, but a degree of longitude shrinks
-towards the poles, so a grid defined in degrees would produce cells that are
-noticeably narrower in Southland than in Northland. Projecting to metres first
-gives cells that are genuinely 1 km on a side.
+The grid is built in NZTM2000 (EPSG:2193).
 
 Target definition. Each cell holds a distribution of MMI values rather than a
 single number, so a central tendency measure has to be chosen. Mean, median
 and mode are all computed and carried forward together, so the choice can be
 made with evidence in the exploratory notebook rather than being fixed here.
-
-All three are derived directly from the MMI level counts rather than by
-expanding the counts back into individual rows. The results are identical and
-it avoids materialising roughly 600,000 rows.
 """
 
 import numpy as np
@@ -33,9 +25,6 @@ NZTM = "EPSG:2193"
 MMI_LEVELS = np.arange(3, 9)
 MMI_COLUMNS = [f"mmi_{level}" for level in MMI_LEVELS]
 
-# Mainland New Zealand, which is also roughly the extent over which NZTM2000
-# is valid. The Chatham Islands sit outside it, on the far side of the
-# antimeridian, and use their own projection.
 MAINLAND_BOUNDS = {
     "min_longitude": 166.0,
     "max_longitude": 179.0,
@@ -43,8 +32,6 @@ MAINLAND_BOUNDS = {
     "max_latitude": -34.0,
 }
 
-# Reports whose geolocation failed are published at this exact coordinate,
-# a few hundred metres from the origin of the coordinate system.
 NULL_ISLAND_TOLERANCE = 0.5
 
 _to_nztm = Transformer.from_crs(WGS84, NZTM, always_xy=True)
@@ -52,12 +39,7 @@ _from_nztm = Transformer.from_crs(NZTM, WGS84, always_xy=True)
 
 
 def _as_coordinate_input(values):
-    """Coerce coordinates into a form pyproj transforms without complaint.
-
-    pyproj routes a single-element numpy array through its scalar point
-    transform, which numpy deprecates and will eventually reject. Multi-element
-    arrays and plain lists both take the vectorised path, so a one-element
-    array is handed over as a list. At that size the conversion costs nothing.
+    """Coerce coordinates into a form pyproj transforms.
     """
     array = np.atleast_1d(np.asarray(values, dtype="float64"))
     return array.tolist() if array.size == 1 else array
@@ -73,9 +55,6 @@ def _transform(transformer, first, second):
 
 def classify_locations(felt):
     """Label each reporting location as mainland, null island, or elsewhere.
-
-    Kept separate from filtering so the notebook can report exactly what was
-    removed and why, rather than a single opaque row count.
     """
     longitude = felt["longitude"]
     latitude = felt["latitude"]
@@ -95,26 +74,13 @@ def classify_locations(felt):
 
 
 def filter_to_mainland(felt, verbose=True):
-    """Drop reporting locations that cannot be used, and say what went.
+    """Drop reporting locations that cannot be used.
 
     Three groups are removed:
 
       null_island  Reports whose geolocation failed, published at (0.005, 0.003).
-                   These carry real report counts, up to 55 at a single point,
-                   so leaving them in would invent a densely observed cell
-                   thousands of kilometres from every epicentre.
 
-      elsewhere    Everything else outside the mainland box. Mostly genuine
-                   reports filed from Australia, the United Kingdom, the
-                   Philippines and others: real people, but not New Zealand
-                   shaking, and the distances would be meaningless.
-
-                   This category also absorbs any Chatham Islands reports,
-                   which are legitimate New Zealand shaking. They are dropped
-                   because the islands sit outside the NZTM2000 zone of
-                   validity and so cannot share a projected grid with the
-                   mainland. That is a known limitation rather than a data
-                   problem, and there is no separate label for it.
+      elsewhere    Everything else outside the mainland box.
     """
     category = classify_locations(felt)
     kept = felt[category == "mainland"].reset_index(drop=True)
@@ -150,11 +116,6 @@ def from_nztm(easting, northing):
 
 def assign_grid_cells(felt, cell_size_m=1000):
     """Attach a projected grid cell index and centroid to each reporting location.
-
-    Cell indices are the floor of the projected coordinate divided by the cell
-    size, so every point inside a cell maps to the same pair of integers. The
-    centroid is used later for distance calculations, so that every report in a
-    cell is treated as being the same distance from the epicentre.
     """
     easting, northing = to_nztm(felt["longitude"], felt["latitude"])
 
@@ -179,10 +140,7 @@ def mmi_mean(counts):
 
 def mmi_mode(counts):
     """Most frequently reported MMI for each row.
-
-    Ties are broken towards the lower intensity. argmax returns the first
-    maximum and the levels are in ascending order, so this happens naturally,
-    but it is a deliberate choice: overstating shaking is the worse error.
+    Ties are broken towards the lower intensity.
     """
     return MMI_LEVELS[np.argmax(counts, axis=1)]
 
@@ -195,11 +153,8 @@ def mmi_mode_is_tied(counts):
 
 def mmi_median(counts):
     """Median MMI for each row, using the conventional definition.
-
     With an even number of reports the two central values are averaged, so
-    this can return a half step such as 4.5. That is intentional: it keeps the
-    median comparable with the mean in the central tendency comparison, rather
-    than silently rounding towards one side.
+    this can return a half step such as 4.5.
     """
     totals = counts.sum(axis=1)
     cumulative = counts.cumsum(axis=1)
@@ -215,11 +170,6 @@ def mmi_median(counts):
 
 def aggregate_to_cells(felt, min_reports=5, cell_size_m=1000, verbose=True):
     """Aggregate reporting locations to one row per earthquake per grid cell.
-
-    Report counts at each MMI level are summed across every location falling in
-    the cell, then the three candidate targets are derived from that combined
-    distribution. Cells below min_reports are dropped: a cell holding two
-    reports gives a target that is mostly noise.
     """
     located = assign_grid_cells(felt, cell_size_m=cell_size_m)
 
@@ -284,17 +234,10 @@ def apply_weight_scheme(long_form, scheme="sqrt"):
     so the label distribution is untouched. What changes is how much the cell
     counts against every other cell:
 
-      count   influence proportional to the number of reports. This is the
-              inverse-variance optimal choice if reports were independent
-              observations, but they are not: five hundred people describing
-              the same shaking at the same place is nothing like five hundred
-              independent measurements. It also pulls population bias straight
-              into the loss, since dense urban cells would dominate.
+      count   influence proportional to the number of reports. This is would
+              be good choice if reports were independent observations.
 
       sqrt    influence proportional to the square root of the report count.
-              Standard error scales with the inverse square root of sample
-              size, so this credits well observed cells without letting them
-              swamp sparse ones. The default.
 
       equal   every cell contributes exactly one unit regardless of how many
               people reported. Removes population bias entirely, at the cost
@@ -320,22 +263,6 @@ def apply_weight_scheme(long_form, scheme="sqrt"):
 def expand_to_weighted_labels(cells, feature_columns=None):
     """Turn each cell into one weighted row per MMI level actually reported.
 
-    Rather than collapsing a cell to a single summary value, every reported
-    level is kept and carries the number of people who chose it as its weight.
-    A cell where 12 people said MMI 4 and 9 said MMI 5 contributes both rows,
-    weighted 12 and 9, instead of being flattened to "4".
-
-    This matters because collapsing loses a lot. The mode accounts for a median
-    of only about 55% of a cell's reports, and in roughly a third of cells it is
-    a minority view that most respondents disagreed with. Weighting also removes
-    the tie-breaking problem entirely: there is no longer a single winner to
-    pick, so the 12.5% of cells with a tied mode stop being arbitrary.
-
-    Every label is a genuine integer report, so the target never takes an
-    impossible half-step value. The model still yields a continuous surface,
-    because the probability distribution it predicts can be collapsed to an
-    expected MMI when one is needed for mapping.
-
     Returns one row per (cell, reported level), with columns:
       mmi     the reported intensity, an integer between 3 and 8
       weight  how many people at that cell reported it
@@ -346,9 +273,7 @@ def expand_to_weighted_labels(cells, feature_columns=None):
         if column not in MMI_COLUMNS and column not in identifiers
     ]
 
-    # Callers commonly pass a feature list plus a few extras and end up
-    # repeating one. melt raises an unhelpful KeyError on a duplicate, so
-    # deduplicate here while preserving order.
+
     seen = set(identifiers)
     carried = []
     for column in requested:
@@ -365,6 +290,4 @@ def expand_to_weighted_labels(cells, feature_columns=None):
 
     long_form["mmi"] = long_form["mmi"].str.removeprefix("mmi_").astype("int64")
 
-    # A level nobody reported contributes nothing and would only add rows a
-    # weighted fit has to ignore.
     return long_form[long_form["weight"] > 0].reset_index(drop=True)

@@ -9,7 +9,7 @@ Two endpoints are used:
   api.geonet.org.nz/intensity?type=reported
       Felt reports for a single event. GeoNet aggregates individual public
       submissions to points before publishing them, so each feature is a
-      location carrying a report count and, usefully, count_mmi: the full
+      location carrying a report count and count_mmi: the full
       distribution of MMI values reported at that point. Keeping that
       distribution rather than a pre-computed summary is what lets the
       central tendency measure (mean, median or mode) be chosen later
@@ -60,10 +60,6 @@ def _get_json(url, params, cache_path, force=False):
 
 def fetch_events(min_magnitude, max_magnitude, start_date, end_date, force=False):
     """Return a DataFrame of earthquake events in the given magnitude and date range.
-
-    Dates are ISO strings, e.g. "2016-01-01T00:00:00". The GeoNet catalogue
-    covers all of New Zealand; filtering to events that actually generated
-    felt reports happens later, once report counts are known.
     """
     params = {
         "minmag": min_magnitude,
@@ -71,9 +67,7 @@ def fetch_events(min_magnitude, max_magnitude, start_date, end_date, force=False
         "startdate": start_date,
         "enddate": end_date,
     }
-    # Formatted rather than interpolated raw, so that fetch_events(6, 8, ...)
-    # and fetch_events(6.0, 8.0, ...) resolve to the same cache file instead of
-    # fetching the identical query twice under two names.
+
     cache_name = (f"events_{float(min_magnitude):.1f}_{float(max_magnitude):.1f}"
                   f"_{start_date[:10]}_{end_date[:10]}.json")
     payload = _get_json(QUAKE_SEARCH_URL, params, EVENTS_DIR / cache_name, force=force)
@@ -101,13 +95,6 @@ def fetch_events(min_magnitude, max_magnitude, start_date, end_date, force=False
 
 def filter_to_new_zealand(events):
     """Drop events outside New Zealand.
-
-    The GeoNet catalogue includes teleseismic events: distant earthquakes
-    picked up by New Zealand instruments. A November 2016 query returns
-    events in Chile and Japan alongside the Kaikoura sequence. They are real
-    earthquakes but not New Zealand ones, and leaving them in would produce
-    meaningless hypocentral distances.
-
     The bounding box is split because New Zealand straddles the antimeridian:
     the mainland sits around 165 to 180 degrees east, while the Chatham
     Islands sit just past it at roughly -177 degrees.
@@ -124,19 +111,6 @@ def filter_to_new_zealand(events):
 
 def drop_duplicate_events(events):
     """Collapse repeated catalogue entries for the same physical earthquake.
-
-    GeoNet sometimes publishes several entries sharing an origin time and
-    location, differing only in magnitude solution. The highest magnitude is
-    kept, on the basis that later revisions tend to refine upward for large
-    events.
-
-    On the current New Zealand window this removes nothing, and it is kept as a
-    guard rather than claimed as a finding. The duplicates that do exist in the
-    raw catalogue, such as the three November 2016 entries off Fukushima, are
-    all teleseismic, so filter_to_new_zealand reaches them first. A different
-    date range or a change at GeoNet could put duplicates inside the New
-    Zealand box, and silently training on the same earthquake twice would be
-    worse than an inert filter.
     """
     if events.empty:
         return events
@@ -172,19 +146,12 @@ def select_stratified_events(events, bin_width=0.5, max_per_bin=None, random_sta
     sample would be almost entirely low magnitude and the model would barely
     see the large shaking it most needs to predict. Sampling within bins
     trades total volume for coverage across the magnitude range.
-
-    Bins holding fewer than max_per_bin events contribute everything they
-    have, so the result is balanced only as far as the catalogue allows.
-    Passing max_per_bin=None keeps every event and just adds the bin labels.
     """
     binned = assign_magnitude_bins(events, bin_width=bin_width)
 
     if max_per_bin is None or binned.empty:
         return binned.reset_index(drop=True)
 
-    # An explicit loop rather than groupby.apply: newer pandas drops the
-    # grouping column from the frames passed to apply, which silently loses
-    # magnitude_bin from the result.
     parts = [
         group.sample(min(len(group), max_per_bin), random_state=random_state)
         for _, group in binned.groupby("magnitude_bin", observed=True)
@@ -209,10 +176,6 @@ def summarise_bins(events):
 
 def fetch_felt_reports(public_id, force=False, warn_out_of_range=True):
     """Return a DataFrame of felt report points for one earthquake.
-
-    One row per reporting location, with the MMI distribution at that
-    location expanded into columns named mmi_3 through mmi_8. Events with no
-    felt reports return an empty DataFrame rather than raising.
     """
     payload = _get_json(
         INTENSITY_URL,
@@ -241,11 +204,7 @@ def fetch_felt_reports(public_id, force=False, warn_out_of_range=True):
                 row[f"mmi_{level}"] = count
             else:
                 # The FRR survey offers six cartoons mapping to MMI 3 to 8, so
-                # anything outside that range should not exist. A handful of
-                # such reports do appear in the archive (single figures across
-                # the whole catalogue) and GeoNet's own summary mmi field never
-                # uses them. They are dropped, but counted so the caller can see
-                # it happened rather than losing data silently.
+                # anything outside that range should not exist.
                 out_of_range[level] = out_of_range.get(level, 0) + count
 
         rows.append(row)
@@ -266,8 +225,6 @@ def fetch_felt_reports(public_id, force=False, warn_out_of_range=True):
     if not frame.empty:
         columns = [f"mmi_{level}" for level in MMI_LEVELS]
         frame[columns] = frame[columns].fillna(0).astype(int)
-        # report_count comes straight from GeoNet and includes any dropped
-        # out-of-scale reports, so recompute it from the levels we kept.
         frame["report_count"] = frame[columns].sum(axis=1)
 
     return frame
@@ -293,16 +250,6 @@ def build_dataset(
       3. Sample evenly across magnitude bins.
       4. Fetch felt reports for each sampled event.
       5. Drop events below min_reports.
-
-    Every step is parameterised, so a different study period or magnitude
-    range needs no code changes. Defaults reproduce the dataset described in
-    the README.
-
-    A note on min_reports: it is deliberately permissive. The real quality
-    control happens later at the cell level, where cells with too few reports
-    are discarded. Filtering hard here would throw away whole earthquakes
-    that still contain a handful of well observed locations, and would strip
-    out the smaller magnitudes entirely.
     """
     events = fetch_events(min_magnitude, max_magnitude, start_date, end_date, force=force)
     if verbose:
@@ -335,9 +282,6 @@ def build_dataset(
 
 def fetch_felt_reports_for_events(public_ids, min_reports=0, force=False, verbose=True):
     """Fetch felt reports for many events and return them as one DataFrame.
-
-    Events whose total report count falls below min_reports are dropped, which
-    is how sparsely observed earthquakes get excluded.
     """
     frames = []
     for index, public_id in enumerate(public_ids, start=1):

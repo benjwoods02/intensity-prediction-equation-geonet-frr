@@ -12,22 +12,9 @@ misbehave at a magnitude nobody thought to plot. The numeric check in
 spatial.py is the test. These maps exist to show what a verdict means, and to
 make the shape of a failure legible once the number has already caught it.
 
-Every map is drawn for the same earthquake on the same colour scale, so the
-panels can be compared directly rather than each being read on its own terms.
-
 Run it directly to regenerate everything into maps/:
 
     python src/maps.py
-
-Outputs:
-
-    maps/contact-sheet.png          all fourteen models together
-    maps/selected-vs-rejected.png   the two that matter, side by side
-    maps/models/NN_<model>.png      one map per model, in accuracy order
-
-Predictions are masked to land using assets/nz_coastline.json, a simplified
-Natural Earth coastline committed with the repository so the maps render
-offline.
 """
 
 import json
@@ -53,8 +40,6 @@ import spatial as S
 from clean import apply_weight_scheme, expand_to_weighted_labels
 from features import MODEL_FEATURES, model_features
 
-# Everything is resolved against the repository root rather than the working
-# directory, so `python src/maps.py` behaves the same from anywhere.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 COASTLINE_PATH = REPO_ROOT / "assets" / "nz_coastline.json"
 
@@ -69,15 +54,7 @@ KAIKOURA = {
     "latitude": -42.69,
 }
 
-# The full range the Felt RAPID Report survey can express, shared across every
-# panel. Fixing the scale is what makes the maps comparable, and it is how
-# published shake maps are drawn for the same reason.
-#
-# It also carries a finding. Most of these maps stay pale even at the epicentre
-# of a magnitude 7.8 earthquake, because most of the candidates never predict
-# strong shaking anywhere. Only the two Hist Gradient Boosting classifiers
-# reach the top of the scale. Contours are drawn every half unit so the shape
-# of each decay stays readable regardless of how much colour the model uses.
+
 COLOUR_RANGE = (3.0, 8.0)
 COLOUR_MAP = "YlOrRd"
 CONTOUR_LEVELS = [3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 7.0]
@@ -137,9 +114,7 @@ def draw(ax, field, event, rings, vmin=COLOUR_RANGE[0], vmax=COLOUR_RANGE[1]):
     mesh = ax.pcolormesh(longitude, latitude, intensity, cmap=COLOUR_MAP,
                          vmin=vmin, vmax=vmax, shading="nearest")
 
-    # Contours make the shape of the decay readable. A model that attenuates
-    # properly draws closed rings around the epicentre; a model that does not
-    # draws bands, islands, or nothing at all.
+
     with np.errstate(invalid="ignore"):
         ax.contour(longitude, latitude, intensity, levels=CONTOUR_LEVELS,
                    colors="#444444", linewidths=0.4, alpha=0.7)
@@ -172,10 +147,6 @@ def title_for(row, rank=None):
 
 def contact_sheet(fields, physical, event, rings, path, columns=5):
     """Every model on one page, ordered by accuracy.
-
-    Read left to right the maps get less accurate. Read by title colour, only
-    two of them are usable. The two orderings do not agree, which is the
-    finding this project exists to make.
     """
     rows = int(np.ceil(len(physical) / columns))
     fig, axes = plt.subplots(rows, columns, figsize=(2.6 * columns, 3.5 * rows),

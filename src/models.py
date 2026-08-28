@@ -12,13 +12,6 @@ The split is also stratified by magnitude. Large earthquakes are rare: there is
 one above magnitude 7.5 in the whole catalogue. An unstratified split of 95
 events could easily place every large event on one side, leaving a model that
 has never seen strong shaking, or a test set that cannot measure it.
-
-The baseline is the classical attenuation form, intensity as a linear function
-of magnitude and the logarithm of distance. It is fitted here rather than taken
-from a published equation with published coefficients, because the New Zealand
-equations require rupture plane geometry that is not available from felt
-reports alone. What it provides is the honest question: does a more complex
-model beat the simplest form that respects the physics?
 """
 
 import numpy as np
@@ -36,12 +29,6 @@ def event_table(frame, magnitude_column="magnitude", bin_width=0.5):
     events = frame.groupby(GROUP_COLUMN, as_index=False)[magnitude_column].first()
     events["stratum_value"] = (events[magnitude_column] // bin_width) * bin_width
 
-    # A stratum holding a single event cannot be split, and the sparse bands
-    # are always the large magnitudes: there is one event above 7.5 in the
-    # whole catalogue. Starting from the top, any band with fewer than two
-    # events is folded down into the next one, repeatedly, until every band
-    # can be split. This keeps the big earthquakes grouped together rather
-    # than dropping them from stratification altogether.
     bands = sorted(events["stratum_value"].unique(), reverse=True)
     for index, band in enumerate(bands[:-1]):
         if (events["stratum_value"] == band).sum() < 2:
@@ -128,11 +115,6 @@ class AttenuationBaseline(BaseEstimator, RegressorMixin):
 
 def expected_mmi(probabilities, classes):
     """Collapse predicted class probabilities to a single expected intensity.
-
-    A classifier returns how likely each intensity level is. Weighting the
-    levels by those probabilities gives a continuous value, which is what
-    shake maps and the attenuation check in the next phase need. It also means
-    a confident wrong answer is penalised more than an uncertain one.
     """
     return probabilities @ np.asarray(classes, dtype="float64")
 
@@ -154,11 +136,6 @@ def report_level_metrics(y_true, y_predicted, sample_weight=None):
 
 def cell_level_metrics(frame, predicted_column="predicted_mmi", observed_column="mmi_mean"):
     """Accuracy per square kilometre, with every cell counting once.
-
-    Report level metrics are dominated by densely populated cells, because
-    that is where the reports are. This view weights every cell equally, which
-    is the fairer measure of whether the model describes the country rather
-    than the cities.
     """
     cells = frame.groupby(CELL_COLUMNS, as_index=False).agg(
         predicted=(predicted_column, "first"),
@@ -178,10 +155,6 @@ def cell_level_metrics(frame, predicted_column="predicted_mmi", observed_column=
 
 def per_class_recall(y_true, y_predicted_class, classes):
     """How often each intensity level is recovered.
-
-    Aggregate accuracy hides the levels that matter. MMI 7 and 8 together are
-    about 1.3% of reports, so a model that never predicts above 6 can still
-    look good overall while being useless for damaging shaking.
     """
     y_true = np.asarray(y_true)
     y_predicted_class = np.asarray(y_predicted_class)
@@ -201,9 +174,7 @@ def per_class_recall(y_true, y_predicted_class, classes):
 
 def ranked_probability_score(probabilities, y_true, classes, sample_weight=None):
     """Ranked Probability Score for ordinal forecasts. Lower is better.
-
-    This is the metric the "within 1 MMI" score should probably have been all
-    along. It compares the predicted cumulative distribution with the observed
+    It compares the predicted cumulative distribution with the observed
     one, squared and summed across levels:
 
         RPS = mean over samples of  sum_k (F_pred(k) - F_obs(k))^2 / (K - 1)
@@ -221,9 +192,6 @@ def ranked_probability_score(probabilities, y_true, classes, sample_weight=None)
     It uses the whole predicted distribution rather than collapsing it, so a
     model that is uncertain in the right way scores better than one that is
     confidently wrong.
-
-    It is also the standard score for ordinal and categorical forecasts in
-    meteorology and seismology, so it is not an invention of this project.
     """
     probabilities = np.asarray(probabilities, dtype="float64")
     classes = np.asarray(classes)
@@ -247,10 +215,6 @@ def balanced_class_weights(y, classes):
     MMI 7 and 8 are about 1.3% of reports between them, so an unweighted fit
     can ignore them entirely and still score well. Balancing makes a rare high
     intensity worth as much in the loss as a common low one.
-
-    Returned as a mapping so it can be folded into the existing sample weights
-    rather than relying on a class_weight argument, which regressors and
-    several classifiers do not accept.
     """
     y = np.asarray(y)
     counts = {level: max((y == level).sum(), 1) for level in classes}
@@ -260,9 +224,6 @@ def balanced_class_weights(y, classes):
 
 def apply_class_weights(frame, classes, target_column="mmi", weight_column="weight"):
     """Fold balanced class weights into the existing per-row sample weights.
-
-    The cell weighting decides how much a location counts. The class weighting
-    decides how much an intensity level counts. Multiplying them keeps both.
     """
     weights = balanced_class_weights(frame[target_column], classes)
     scaled = frame[weight_column] * frame[target_column].map(weights)
@@ -272,21 +233,6 @@ def apply_class_weights(frame, classes, target_column="mmi", weight_column="weig
 def high_intensity_discrimination(probabilities, y_true, classes, threshold=6,
                                   sample_weight=None):
     """How well the model ranks cells by risk of damaging shaking.
-
-    Point classification is the wrong question for the intensities that matter
-    most. MMI 7 and above is under 2% of reports, so a model choosing the most
-    likely single level will essentially never name it, and recall measured
-    that way reads as zero even for a model carrying real signal.
-
-    Ranking is the right question, and the one an operational system actually
-    asks: which places are most likely to have been shaken hard enough to
-    cause damage? Summing the predicted probability at or above a threshold
-    gives a risk score, and the area under the ROC curve measures whether that
-    score sorts the damaging cells above the rest.
-
-    This is also how intensity products are used in practice. A response team
-    is not served by a claim that one square kilometre is exactly MMI 7, but
-    is served by a ranked list of where damaging shaking is most likely.
     """
     from sklearn.metrics import roc_auc_score
 
